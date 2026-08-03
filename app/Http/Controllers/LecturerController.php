@@ -11,7 +11,9 @@ use App\Models\Notification;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Str;
 
 class LecturerController extends Controller
 {
@@ -101,6 +103,11 @@ class LecturerController extends Controller
             'title' => 'required|string|max:200',
             'content' => 'required|string',
             'scheduled_date' => 'required|date',
+            'attendance_enabled' => 'sometimes|boolean',
+            'gps_required' => 'sometimes|boolean',
+            'latitude' => 'required_if:gps_required,true|nullable|numeric|between:-90,90',
+            'longitude' => 'required_if:gps_required,true|nullable|numeric|between:-180,180',
+            'attendance_score' => 'sometimes|nullable|numeric|min:0|max:999.99',
         ]);
 
         if ($validator->fails()) {
@@ -121,12 +128,71 @@ class LecturerController extends Controller
             'title' => $request->input('title'),
             'content' => $request->input('content'),
             'scheduled_date' => $request->input('scheduled_date'),
+            // Random token drives the QR code — only ever returned to the lecturer.
+            'token' => Str::random(20),
+            'token_rotated_at' => now(),
+            'is_active' => true,
+            'attendance_enabled' => $request->boolean('attendance_enabled', true),
+            'totp_secret' => Str::random(32),
+            'gps_required' => $request->boolean('gps_required'),
+            'latitude' => $request->filled('latitude') ? $request->input('latitude') : null,
+            'longitude' => $request->filled('longitude') ? $request->input('longitude') : null,
+            // Optional marks awarded to each student who attends this lecture.
+            'attendance_score' => $request->filled('attendance_score') ? $request->input('attendance_score') : null,
         ]);
 
+        // Notify students about the new lecture (enrolled in the course, or in
+        // the course's department — the same audience that can see it on the portal)
+        $students = $this->lectureStudents($lecture);
+        foreach ($students as $student) {
+            Notification::create([
+                'user_id' => $student->id,
+                'lecture_id' => $lecture->id,
+                'type' => 'info',
+                'title' => 'New Lecture Created',
+                'message' => "A new lecture '{$lecture->title}' has been created for {$course->code} - {$course->name}. Scheduled: " . $lecture->scheduled_date->format('M d, Y \a\t g:i A'),
+            ]);
+        }
+
         return response()->json([
-            'message' => 'Lecture created successfully.',
+            'message' => 'Lecture created successfully. Students have been notified.',
             'lecture' => $this->formatLecture($lecture),
         ], 201);
+    }
+
+    /**
+     * Live attendance code for the QR modal (polled by the frontend).
+     * GET /api/lecturer/lectures/{id}/live
+     *
+     * Lazily rotates the token when its interval has elapsed, and returns the
+     * current QR url, the rotating 6-digit code and their expiry timestamps.
+     */
+    public function liveCode(Request $request, int $id): JsonResponse
+    {
+        $lecturer = $request->user();
+        $lecture = Lecture::where('id', $id)
+            ->where('lecturer_id', $lecturer->id)
+            ->first();
+
+        if (! $lecture) {
+            return response()->json(['message' => 'Lecture not found or not yours.'], 404);
+        }
+
+        $lecture->ensureFreshToken();
+
+        return response()->json([
+            'token' => $lecture->token,
+            'previous_token' => $lecture->previous_token,
+            'qr_url' => url('/attend/' . $lecture->token),
+            'code' => $lecture->totp(),
+            'code_expires_at' => $lecture->totpExpiresAt()->toIso8601String(),
+            'rotation_expires_at' => $lecture->token_rotated_at
+                ->addSeconds((int) config('attendance.rotation_seconds', 60))
+                ->toIso8601String(),
+            'rotation_seconds' => (int) config('attendance.rotation_seconds', 60),
+            'gps_required' => $lecture->gps_required,
+            'attendance_count' => Attendance::where('lecture_id', $lecture->id)->count(),
+        ]);
     }
 
     /**
@@ -181,13 +247,15 @@ class LecturerController extends Controller
         $attendance = Attendance::updateOrCreate(
             [
                 'student_id' => $request->student_id,
-                'course_id' => $lecture->course_id,
-                'lecture_date' => $lecture->scheduled_date,
+                'lecture_id' => $lecture->id,
             ],
             [
+                'course_id' => $lecture->course_id,
                 'lecturer_id' => $lecturer->id,
+                'lecture_date' => $lecture->scheduled_date,
                 'status' => $request->status,
                 'notes' => $request->notes,
+                'source' => 'manual',
             ]
         );
 
@@ -212,9 +280,8 @@ class LecturerController extends Controller
             return response()->json(['message' => 'Lecture not found or not yours.'], 404);
         }
 
-        $attendances = Attendance::where('course_id', $lecture->course_id)
-            ->where('lecture_date', $lecture->scheduled_date)
-            ->with('student')
+        $attendances = Attendance::where('lecture_id', $lecture->id)
+            ->with('student', 'lecture')
             ->get()
             ->map(fn ($a) => $this->formatAttendance($a));
 
@@ -241,28 +308,28 @@ class LecturerController extends Controller
             'ended_at' => now(),
         ]);
 
-        // Get students enrolled in the course
+        // Students who marked attendance (present or late) are safe — everyone
+        // else in the lecture audience is treated as absent and notified.
         $course = Course::find($lecture->course_id);
-        $students = $course->students()->where('status', 'Approved')->get();
+        $students = $this->lectureStudents($lecture);
 
-        // Get students who were absent or late
-        $absentStudents = Attendance::where('course_id', $lecture->course_id)
-            ->where('lecture_date', $lecture->scheduled_date)
-            ->whereIn('status', ['absent', 'late'])
+        $marked = Attendance::where('lecture_id', $lecture->id)
+            ->whereIn('status', ['present', 'late'])
             ->pluck('student_id')
             ->toArray();
 
-        // Send notifications to absent students
         foreach ($students as $student) {
-            if (in_array($student->id, $absentStudents)) {
-                Notification::create([
-                    'user_id' => $student->id,
-                    'lecture_id' => $lecture->id,
-                    'type' => 'warning',
-                    'title' => 'Missed Lecture',
-                    'message' => "You missed the lecture '{$lecture->title}' for {$course->code} - {$course->name}. Please review the course materials.",
-                ]);
+            if (in_array($student->id, $marked)) {
+                continue;
             }
+
+            Notification::create([
+                'user_id' => $student->id,
+                'lecture_id' => $lecture->id,
+                'type' => 'warning',
+                'title' => 'Missed Lecture',
+                'message' => "You missed the lecture '{$lecture->title}' for {$course->code} - {$course->name}. Please review the course materials.",
+            ]);
         }
 
         return response()->json([
@@ -272,6 +339,26 @@ class LecturerController extends Controller
     }
 
     /* ── Private helpers ── */
+    /**
+     * The audience for a lecture: approved students enrolled in the course,
+     * plus approved students in the course's department (the portal shows
+     * department-wide lectures, so those students can scan the QR too).
+     */
+    private function lectureStudents(Lecture $lecture): Collection
+    {
+        $course = $lecture->course;
+
+        $enrolled = $course->students()->where('status', 'Approved')->get();
+
+        $dept = $course->department_id ? Department::find($course->department_id) : null;
+        $deptName = $dept?->name ?: $course->department;
+        $byDept = $deptName
+            ? User::students()->where('status', 'Approved')->where('dept', $deptName)->get()
+            : collect();
+
+        return $enrolled->concat($byDept)->unique('id')->values();
+    }
+
     /**
      * Resolve the lecturer's department name.
      *
@@ -328,9 +415,14 @@ class LecturerController extends Controller
             'course_id' => $l->course_id,
             'title' => $l->title,
             'content' => $l->content,
+            // token is lecturer-only — the student-facing payload never includes it
+            'token' => $l->token,
             'scheduled_date' => $l->scheduled_date,
             'ended_at' => $l->ended_at,
             'is_active' => $l->is_active,
+            'attendance_enabled' => $l->attendance_enabled,
+            'gps_required' => $l->gps_required,
+            'attendance_score' => $l->attendance_score,
             'created_at' => $l->created_at,
         ];
     }
@@ -346,6 +438,8 @@ class LecturerController extends Controller
             'lecture_date' => $a->lecture_date,
             'status' => $a->status,
             'notes' => $a->notes,
+            'source' => $a->source,
+            'attendance_score' => $a->lecture->attendance_score ?? null,
         ];
     }
 }

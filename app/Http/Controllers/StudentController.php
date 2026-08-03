@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Attendance;
 use App\Models\Course;
+use App\Models\Department;
 use App\Models\Document;
 use App\Models\Lecture;
 use App\Models\Notification;
@@ -251,7 +252,7 @@ class StudentController extends Controller
     {
         $user = $request->user();
         $attendances = Attendance::where('student_id', $user->id)
-            ->with('course', 'lecturer')
+            ->with('course', 'lecturer', 'lecture')
             ->latest('lecture_date')
             ->get()
             ->map(fn ($a) => $this->formatAttendance($a));
@@ -266,15 +267,34 @@ class StudentController extends Controller
     public function lectures(Request $request): JsonResponse
     {
         $user = $request->user();
-        $courseIds = $user->courses->pluck('id');
+        
+        // Get courses from student's department
+        $department = Department::where('name', $user->dept)->first();
+        
+        if ($department) {
+            // Show lectures from all courses in the student's department
+            $courseIds = Course::where('department_id', $department->id)
+                ->where('is_active', true)
+                ->pluck('id');
+        } else {
+            // Fallback to enrolled courses if department not found
+            $courseIds = $user->courses->pluck('id');
+        }
         
         $lectures = Lecture::whereIn('course_id', $courseIds)
             ->with('course', 'lecturer')
             ->latest('scheduled_date')
-            ->get()
-            ->map(fn ($l) => $this->formatLecture($l));
+            ->get();
 
-        return response()->json(['lectures' => $lectures]);
+        // Which lectures has this student already marked? Drives the
+        // "✓ Attended" badge on the portal.
+        $attended = Attendance::where('student_id', $user->id)
+            ->whereIn('lecture_id', $lectures->pluck('id'))
+            ->pluck('status', 'lecture_id');
+
+        return response()->json([
+            'lectures' => $lectures->map(fn ($l) => $this->formatLecture($l, $attended[$l->id] ?? null)),
+        ]);
     }
 
     /**
@@ -290,6 +310,160 @@ class StudentController extends Controller
             ->map(fn ($n) => $this->formatNotification($n));
 
         return response()->json(['notifications' => $notifications]);
+    }
+
+    /**
+     * Public lecture info for the QR check-in page (no token leak).
+     * GET /api/attend/{token}
+     */
+    public function lectureInfo(string $token): JsonResponse
+    {
+        $lecture = Lecture::where('token', $token)->with('course', 'lecturer')->first();
+
+        if (! $lecture) {
+            return response()->json(['message' => 'Invalid or expired attendance code.'], 404);
+        }
+
+        return response()->json([
+            'lecture' => [
+                'id' => $lecture->id,
+                'title' => $lecture->title,
+                'course_code' => $lecture->course->code ?? null,
+                'course_name' => $lecture->course->name ?? null,
+                'lecturer_name' => $lecture->lecturer->name ?? null,
+                'scheduled_date' => $lecture->scheduled_date,
+                'is_active' => $lecture->is_active,
+                'attendance_enabled' => $lecture->attendance_enabled,
+                'gps_required' => $lecture->gps_required,
+                'attendance_score' => $lecture->attendance_score,
+            ],
+        ]);
+    }
+
+    /**
+     * Mark attendance via QR token or the rotating 6-digit code.
+     * POST /api/student/attend  { token | code, device_id, latitude?, longitude? }
+     *
+     * Guard rails:
+     *  - Lecture must exist, be active and have smart attendance enabled.
+     *  - QR token rotates every rotation_seconds; the previous token stays valid
+     *    for one rotation window (grace).
+     *  - The 6-digit code is a rotating TOTP (±1 step window).
+     *  - Optional GPS geofence when the lecture requires location.
+     *  - A device that already marked ANY student for this lecture is locked out
+     *    (stops one phone being passed around the class).
+     *  - A student can only mark once per lecture.
+     *  - The student must be part of the lecture audience (enrolled or in the
+     *    course's department).
+     */
+    public function scanAttendance(Request $request): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'token' => 'required_without:code|string',
+            'code' => 'required_without:token|string',
+            'device_id' => 'required|string|max:64',
+            'latitude' => 'sometimes|nullable|numeric|between:-90,90',
+            'longitude' => 'sometimes|nullable|numeric|between:-180,180',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['message' => 'Validation failed.', 'errors' => $validator->errors()], 422);
+        }
+
+        $user = $request->user();
+
+        // Resolve the lecture: by rotating QR token, or by the 6-digit TOTP code.
+        if ($request->filled('code')) {
+            $lecture = Lecture::where('is_active', true)
+                ->where('attendance_enabled', true)
+                ->get()
+                ->first(fn ($l) => $l->validateTotp($request->code));
+
+            if (! $lecture) {
+                return response()->json(['message' => 'Invalid or expired code. Check the number and try again.'], 422);
+            }
+        } else {
+            $token = $request->token;
+            $lecture = Lecture::where(fn ($q) => $q->where('token', $token)->orWhere('previous_token', $token))->first();
+
+            if (! $lecture) {
+                return response()->json(['message' => 'Invalid or expired attendance code.'], 404);
+            }
+
+            // May rotate lazily; the matched token stays valid as the previous one.
+            $lecture->ensureFreshToken();
+
+            if (! $lecture->matchesToken($token)) {
+                return response()->json(['message' => 'This code has expired. Ask your lecturer to refresh the QR code.'], 422);
+            }
+        }
+
+        if (! $lecture->is_active) {
+            return response()->json(['message' => 'This lecture has ended. Attendance is closed.'], 422);
+        }
+
+        if (! $lecture->attendance_enabled) {
+            return response()->json(['message' => 'Smart attendance is not enabled for this lecture.'], 422);
+        }
+
+        // Optional GPS geofence — the student must be near the lecture venue.
+        if ($lecture->gps_required) {
+            $lat = $request->input('latitude');
+            $lng = $request->input('longitude');
+
+            if ($lat === null || $lng === null) {
+                return response()->json(['message' => 'Location access is required for this lecture. Allow location and try again.'], 422);
+            }
+
+            $radius = (float) config('attendance.gps_radius_meters', 200);
+            $distance = $lecture->distanceTo((float) $lat, (float) $lng);
+
+            if ($distance > $radius) {
+                return response()->json(['message' => 'You are outside the lecture location (' . round($radius) . 'm). Move closer and try again.'], 422);
+            }
+        }
+
+        // One scan per student first (friendlier message on a re-scan), then
+        // one scan per device — a device that already marked anyone is locked.
+        if (Attendance::where('lecture_id', $lecture->id)
+            ->where('student_id', $user->id)
+            ->exists()) {
+            return response()->json(['message' => 'You have already marked your attendance for this lecture.'], 422);
+        }
+
+        if (Attendance::where('lecture_id', $lecture->id)
+            ->where('device_id', $request->device_id)
+            ->exists()) {
+            return response()->json(['message' => 'This device has already been used to mark attendance for this lecture.'], 422);
+        }
+
+        // Eligibility — enrolled in the course, or in the course's department.
+        $course = $lecture->course;
+        $dept = $course->department_id ? Department::find($course->department_id) : null;
+        $deptName = $dept?->name ?: $course->department;
+
+        $eligible = $course->students()->where('users.id', $user->id)->exists()
+            || ($deptName && $user->dept === $deptName);
+
+        if (! $eligible) {
+            return response()->json(['message' => 'You are not registered for this lecture.'], 403);
+        }
+
+        $attendance = Attendance::create([
+            'student_id' => $user->id,
+            'lecture_id' => $lecture->id,
+            'course_id' => $course->id,
+            'lecturer_id' => $lecture->lecturer_id,
+            'lecture_date' => $lecture->scheduled_date,
+            'status' => 'present',
+            'source' => 'qr',
+            'device_id' => $request->device_id,
+        ]);
+
+        return response()->json([
+            'message' => 'Attendance marked successfully. Enjoy the lecture!',
+            'attendance' => $this->formatAttendance($attendance),
+        ], 201);
     }
 
     /**
@@ -323,6 +497,8 @@ class StudentController extends Controller
     {
         return [
             'id' => $a->id,
+            'lecture_id' => $a->lecture_id,
+            'lecture_title' => $a->lecture->title ?? null,
             'course_id' => $a->course_id,
             'course_name' => $a->course->name ?? null,
             'course_code' => $a->course->code ?? null,
@@ -331,10 +507,13 @@ class StudentController extends Controller
             'lecture_date' => $a->lecture_date,
             'status' => $a->status,
             'notes' => $a->notes,
+            'source' => $a->source,
+            // Marks awarded for attending — from the lecture the student attended.
+            'attendance_score' => $a->lecture->attendance_score ?? null,
         ];
     }
 
-    private function formatLecture(Lecture $l): array
+    private function formatLecture(Lecture $l, ?string $attended = null): array
     {
         return [
             'id' => $l->id,
@@ -348,6 +527,11 @@ class StudentController extends Controller
             'scheduled_date' => $l->scheduled_date,
             'ended_at' => $l->ended_at,
             'is_active' => $l->is_active,
+            'attendance_enabled' => $l->attendance_enabled,
+            'gps_required' => $l->gps_required,
+            'attendance_score' => $l->attendance_score,
+            // 'present' | 'late' | null — the student's own record for this lecture
+            'attended' => $attended,
             'created_at' => $l->created_at,
         ];
     }

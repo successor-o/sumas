@@ -18,6 +18,21 @@ Route::view('/login', 'auth.login')->name('login');
 Route::view('/register', 'auth.register')->name('register');
 
 /*
+| QR smart-attendance check-in page — public. Students open the URL encoded in
+| the lecturer's QR code. The page shows a safe subset of the lecture info and
+| lets an approved student log in and mark their attendance in one tap.
+| (The /api/attend/{token} endpoint behind it never exposes the lecture token.)
+*/
+Route::get('/attend/{token}', function (string $token) {
+    return view('attend', ['token' => $token]);
+});
+
+// Manual 6-digit code entry (no QR scan) — same check-in page without a token.
+Route::get('/attend', function () {
+    return view('attend', ['token' => null]);
+});
+
+/*
 | These dashboards are protected by the auth.redirect middleware. Because login
 | now starts a real backend session, a visitor without an active session — or
 | whose session was deleted/expired — is redirected to their role's login page

@@ -16,6 +16,72 @@
 @media(max-width:900px){.dash-header{position:sticky;top:52px!important;z-index:50}}
 @media(max-width:640px){.dash-header{top:44px!important}}
 @media(max-width:480px){.dash-header{top:42px!important}}
+
+/* ── Lecture cards ── */
+.lecture-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:var(--s4)}
+.lecture-card{background:var(--white);border:1px solid var(--bdr-light);border-radius:var(--r-xl);padding:var(--s5);box-shadow:var(--sh-xs);transition:all var(--dur-mid) var(--ease);position:relative;overflow:hidden}
+.lecture-card:hover{box-shadow:var(--sh-md);transform:translateY(-3px)}
+.lecture-card::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--brand),var(--g400))}
+.lecture-card.attended::before{background:var(--success)}
+.lecture-card-head{display:flex;justify-content:space-between;align-items:center;gap:var(--s2)}
+.lecture-card-course{font-family:var(--f-mono);font-size:.68rem;font-weight:700;letter-spacing:.5px;color:var(--brand);text-transform:uppercase}
+.lecture-card.attended .lecture-card-course{color:var(--success)}
+.lc-dot{opacity:.5}
+.lecture-card-title{font-size:1rem;font-weight:800;color:var(--t-primary);margin:var(--s2) 0 var(--s1);line-height:1.35}
+.lecture-card-meta{font-size:.74rem;color:var(--t-muted);line-height:1.6}
+.lecture-card-content{font-size:.83rem;color:var(--t-secondary);line-height:1.6;margin-top:var(--s3);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.lecture-card-foot{margin-top:var(--s4);padding-top:var(--s3);border-top:1px dashed var(--bdr-light);font-size:.76rem;font-weight:600}
+.lecture-card-foot.attended{color:var(--success)}
+.lecture-card-foot.live{color:var(--brand)}
+
+/* ── Live lecture cards: clickable to scan ── */
+.lecture-card.scannable{cursor:pointer}
+.lecture-card.scannable:hover{box-shadow:0 10px 30px rgba(107,51,24,.16);transform:translateY(-3px)}
+.lecture-card.scannable .lecture-card-title{color:var(--brand)}
+.lc-scan-btn{display:inline-flex;align-items:center;gap:6px;margin-top:var(--s3);width:100%;justify-content:center;
+  height:38px;border-radius:10px;border:1.5px solid var(--brand);background:var(--brand-pale);
+  color:var(--brand);font-family:var(--f-ui);font-size:.8rem;font-weight:700;cursor:pointer;
+  transition:all var(--dur-fast) var(--ease)}
+.lc-scan-btn:hover{background:var(--brand);color:#fff;box-shadow:var(--sh-brand)}
+.att-score{margin-top:2px}
+
+/* ── QR scan modal ── */
+.scan-modal-box{max-width:460px}
+.scan-lecture{background:var(--surf-2);border:1px solid var(--bdr-light);border-radius:var(--r-lg);padding:12px 14px;margin-bottom:14px}
+.scan-lecture-course{font-family:var(--f-mono);font-size:.66rem;font-weight:700;letter-spacing:.6px;color:var(--brand);text-transform:uppercase}
+.scan-lecture-title{font-size:.95rem;font-weight:800;color:var(--t-primary);margin-top:3px}
+.scan-lecture-meta{font-size:.74rem;color:var(--t-muted);margin-top:3px;line-height:1.6}
+.scan-camera-wrap{position:relative;border-radius:var(--r-lg);overflow:hidden;background:#0f0f10;aspect-ratio:1/1}
+.scan-camera-wrap video{width:100%;height:100%;object-fit:cover;display:block}
+.scan-camera-wrap canvas{display:none}
+.scan-camera-overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;
+  color:rgba(255,255,255,.8);font-size:.84rem;text-align:center;padding:20px;line-height:1.5}
+.scan-frame{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:64%;height:64%;pointer-events:none}
+.scan-frame::before,.scan-frame::after{content:'';position:absolute;width:26px;height:26px;border:3px solid var(--g400);border-radius:4px}
+.scan-frame::before{top:-3px;left:-3px;border-right:none;border-bottom:none}
+.scan-frame::after{bottom:-3px;right:-3px;border-left:none;border-top:none}
+.scan-scanline{position:absolute;left:6%;right:6%;height:2px;top:18%;background:linear-gradient(90deg,transparent,var(--g400),transparent);
+  box-shadow:0 0 12px rgba(212,160,32,.8);animation:scanlineMove 2.2s ease-in-out infinite}
+@keyframes scanlineMove{0%,100%{top:16%}50%{top:80%}}
+.scan-status{margin-top:14px}
+.scan-actions{margin-top:14px;display:flex;gap:var(--s3);flex-wrap:wrap}
+.scan-actions .btn{flex:1;min-width:150px}
+.scan-hint{font-size:.72rem;color:var(--t-muted);margin-top:12px;line-height:1.6}
+.scan-err{border-radius:var(--r-lg);padding:12px 14px;font-size:.84rem;font-weight:600;line-height:1.5;margin-top:12px}
+.scan-err.error{background:var(--error-bg);color:var(--error)}
+.scan-err.success{background:var(--success-bg);color:var(--success)}
+.scan-err.warn{background:var(--g100);color:var(--g700)}
+
+/* ── Attendance cards ── */
+.att-card{display:flex;align-items:flex-start;gap:var(--s3);background:var(--white);border:1px solid var(--bdr-light);border-radius:var(--r-lg);padding:var(--s4);margin-bottom:var(--s3);transition:all var(--dur-fast) var(--ease)}
+.att-card:hover{border-color:var(--b300);box-shadow:var(--sh-sm)}
+.att-card-icon{width:42px;height:42px;border-radius:12px;background:var(--surf-2);display:flex;align-items:center;justify-content:center;font-size:1.15rem;flex-shrink:0}
+.att-card-body{flex:1;min-width:0}
+.att-card-course{font-weight:700;font-size:.88rem;color:var(--t-primary)}
+.att-card-lecture{font-size:.8rem;color:var(--t-secondary);margin-top:2px}
+.att-card-meta{font-size:.72rem;color:var(--t-muted);margin-top:4px}
+.att-card-side{display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0}
+.att-source{margin-top:2px}
 </style>
 </head>
 <body>
@@ -508,6 +574,32 @@
 
 
 
+<!-- QR SCAN MODAL (camera check-in) -->
+<div class="student-modal" id="scan-modal" style="display:none">
+  <div class="modal-box scan-modal-box">
+    <div class="modal-head">
+      <div class="modal-name">📷 Scan Attendance QR</div>
+      <button class="modal-close" id="close-scan-modal">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="scan-lecture" id="scan-lecture-info"></div>
+      <div class="scan-camera-wrap">
+        <video id="scan-video" playsinline muted></video>
+        <canvas id="scan-canvas" width="480" height="480"></canvas>
+        <div class="scan-camera-overlay" id="scan-camera-overlay">⏳ Starting camera…</div>
+        <div class="scan-frame" id="scan-frame" style="display:none"></div>
+        <div class="scan-scanline" id="scan-scanline" style="display:none"></div>
+      </div>
+      <div class="scan-err" id="scan-status" style="display:none"></div>
+      <div class="scan-actions">
+        <button class="btn btn-primary btn-md" id="scan-open-attend">🔢 Enter code manually</button>
+      </div>
+      <p class="scan-hint">Point your camera at the QR code on your lecturer’s screen. Check-in happens automatically when the code is recognised.</p>
+    </div>
+  </div>
+</div>
+
+<script src="{{ asset('assets/js/vendor/jsqr.min.js') }}"></script>
 <script src="{{ asset('assets/js/api.js') }}"></script>
 <script src="{{ asset('assets/js/app.js') }}"></script>
 </body>

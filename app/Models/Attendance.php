@@ -9,11 +9,14 @@ class Attendance extends Model
 {
     protected $fillable = [
         'student_id',
+        'lecture_id',
         'course_id',
         'lecturer_id',
         'lecture_date',
         'status',
         'notes',
+        'device_id',
+        'source',
     ];
 
     protected function casts(): array
@@ -36,5 +39,10 @@ class Attendance extends Model
     public function lecturer(): BelongsTo
     {
         return $this->belongsTo(Lecturer::class);
+    }
+
+    public function lecture(): BelongsTo
+    {
+        return $this->belongsTo(Lecture::class);
     }
 }

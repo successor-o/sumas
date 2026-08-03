@@ -33,6 +33,44 @@ const API = {
   put:    (path, data, auth) => API._req('PUT',    path, data, auth),
   delete: (path, auth)  => API._req('DELETE', path, null, auth),
 
+  /**
+   * Stable device fingerprint used for the one-scan-per-device guard on the
+   * smart-attendance endpoints. Persisted in localStorage and blended with
+   * stable browser characteristics so clearing storage alone cannot forge a
+   * "brand new device" for the next scan.
+   */
+  deviceId() {
+    let d = null;
+    try { d = localStorage.getItem('sumas_device_id'); } catch (e) {}
+    if (!d) {
+      d = (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
+        : 'dev-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
+      try { localStorage.setItem('sumas_device_id', d); } catch (e) {}
+    }
+    const fp = [
+      navigator.userAgent, navigator.language, navigator.platform,
+      screen.width + 'x' + screen.height + 'x' + (screen.colorDepth || 24),
+      new Date().getTimezoneOffset(), d
+    ].join('|');
+    let h = 0, i;
+    for (i = 0; i < fp.length; i++) { h = ((h << 5) - h + fp.charCodeAt(i)) | 0; }
+    return 'dev-' + Math.abs(h).toString(36) + '-' + String(d).slice(0, 8);
+  },
+
+  /**
+   * Promise-based geolocation helper (returns null when unavailable/denied).
+   */
+  getPosition(timeoutMs) {
+    return new Promise(resolve => {
+      if (!navigator.geolocation) { resolve(null); return; }
+      navigator.geolocation.getCurrentPosition(
+        pos => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+        () => resolve(null),
+        { enableHighAccuracy: true, timeout: timeoutMs || 8000, maximumAge: 30000 }
+      );
+    });
+  },
+
   /* ══ AUTH ENDPOINTS ══ */
   auth: {
     async register(payload) {
@@ -125,6 +163,13 @@ const API = {
     async markNotificationRead(id) {
       return API.put(`/student/notifications/${id}/read`);
     },
+    // QR smart attendance
+    async attend(token, deviceId) {
+      return API.post('/student/attend', { token, device_id: deviceId });
+    },
+    async getAttendInfo(token) {
+      return API.get(`/attend/${encodeURIComponent(token)}`, false);
+    },
   },
 
   /* ══ LECTURER ENDPOINTS ══ */
@@ -157,6 +202,9 @@ const API = {
     },
     async endLecture(id) {
       return API.post(`/lecturer/lectures/${id}/end`);
+    },
+    async liveCode(id) {
+      return API.get(`/lecturer/lectures/${id}/live`);
     },
   },
 
@@ -281,14 +329,20 @@ const SessionStore = {
       sessionStorage.setItem(this.KEYS.TOKEN, token);
       sessionStorage.setItem(this.KEYS.USER,  JSON.stringify(user));
       sessionStorage.setItem(this.KEYS.ROLE,  role);
+      // Mirror to localStorage so the QR check-in page — which the camera app
+      // opens in a NEW tab (a fresh sessionStorage) — can reuse the session
+      // instead of forcing a re-login.
+      localStorage.setItem(this.KEYS.TOKEN, token);
+      localStorage.setItem(this.KEYS.USER,  JSON.stringify(user));
+      localStorage.setItem(this.KEYS.ROLE,  role);
     } catch {}
   },
 
-  getToken() { return sessionStorage.getItem(this.KEYS.TOKEN) || ''; },
+  getToken() { return sessionStorage.getItem(this.KEYS.TOKEN) || localStorage.getItem(this.KEYS.TOKEN) || ''; },
   getUser()  {
-    try { return JSON.parse(sessionStorage.getItem(this.KEYS.USER) || 'null'); } catch { return null; }
+    try { return JSON.parse(sessionStorage.getItem(this.KEYS.USER) || localStorage.getItem(this.KEYS.USER) || 'null'); } catch { return null; }
   },
-  getRole()  { return sessionStorage.getItem(this.KEYS.ROLE) || ''; },
+  getRole()  { return sessionStorage.getItem(this.KEYS.ROLE) || localStorage.getItem(this.KEYS.ROLE) || ''; },
 
   isLoggedIn()     { return !!this.getToken() && !!this.getUser(); },
   isStudent()      { return this.getRole() === 'student'; },
@@ -296,7 +350,10 @@ const SessionStore = {
   isLecturer()     { return this.getRole() === 'lecturer'; },
 
   clear() {
-    Object.values(this.KEYS).forEach(k => sessionStorage.removeItem(k));
+    Object.values(this.KEYS).forEach(k => {
+      sessionStorage.removeItem(k);
+      localStorage.removeItem(k);
+    });
   },
 
   requireStudent(redirect = '/login') {
