@@ -47,7 +47,7 @@ class FacultySeeder extends Seeder
         ];
 
         foreach ($faculties as $faculty) {
-            Faculty::create($faculty);
+            Faculty::query()->create($faculty);
         }
     }
 }
