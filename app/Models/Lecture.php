@@ -21,7 +21,6 @@ class Lecture extends Model
         'ended_at',
         'is_active',
         'attendance_enabled',
-        'totp_secret',
         'gps_required',
         'latitude',
         'longitude',
@@ -86,50 +85,6 @@ class Lecture extends Model
     public function matchesToken(string $token): bool
     {
         return $this->token === $token || $this->previous_token === $token;
-    }
-
-    /* ── Rotating 6-digit TOTP code ── */
-
-    public function totp(int $step = 0): string
-    {
-        $counter = floor(time() / 30) + $step;
-        $hash = hash_hmac('sha1', pack('N', $counter), (string) $this->totp_secret, true);
-        $offset = ord($hash[19]) & 0x0f;
-        $code = ((ord($hash[$offset]) & 0x7f) << 24)
-              | (ord($hash[$offset + 1]) << 16)
-              | (ord($hash[$offset + 2]) << 8)
-              | ord($hash[$offset + 3]);
-
-        return str_pad((string) ($code % 1000000), 6, '0', STR_PAD_LEFT);
-    }
-
-    /**
-     * Validate a 6-digit code with ±1 step tolerance (the standard TOTP
-     * clock-skew window, which also covers codes typed just as they roll).
-     */
-    public function validateTotp(string $code): bool
-    {
-        if (strlen($code) !== 6 || ! ctype_digit($code)) {
-            return false;
-        }
-
-        foreach ([-1, 0, 1] as $step) {
-            if (hash_equals($this->totp($step), $code)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * When the current TOTP step expires (ISO timestamp, for live countdowns).
-     */
-    public function totpExpiresAt(): \Illuminate\Support\Carbon
-    {
-        $step = (int) floor(time() / 30) * 30;
-
-        return now()->setTimestamp($step + 30);
     }
 
     /* ── GPS geofence ── */

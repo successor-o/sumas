@@ -63,7 +63,6 @@
     .qr-count { margin-top: 14px; font-size: .84rem; font-weight: 800; color: var(--success); }
     .qr-link-row { display: flex; gap: var(--s2); margin-top: 14px; }
     .qr-link-row .input { font-size: .7rem; font-family: var(--f-mono); }
-    .qr-code-display { font-family: var(--f-mono); font-size: 2.5rem; font-weight: 800; letter-spacing: .3em; color: var(--t-primary); margin-top: 16px; text-align: center; }
     .qr-code-meta { font-size: .72rem; color: var(--t-muted); margin-top: 6px; line-height: 1.6; }
     .qr-code-hint { font-size: .74rem; color: var(--t-secondary); margin-top: 10px; background: var(--surf-2); border: 1px dashed var(--bdr); border-radius: var(--r-md); padding: 10px 12px; }
   </style>
@@ -305,13 +304,13 @@
         <input type="datetime-local" id="lecture-date" class="input" required/>
       </div>
       <div class="form-group">
-        <label class="form-label">Smart Attendance (QR)</label>
+        <label class="form-label">Face Scan Check-In</label>
         <label class="switch-row">
           <input type="checkbox" id="lecture-attendance-enabled" checked/>
           <span class="switch"></span>
-          <span>Enable QR check-in for this lecture</span>
+          <span>Enable face scan check-in for this lecture</span>
         </label>
-        <p class="form-hint">When the lecture is active, students scan the QR code shown on your dashboard to mark attendance.</p>
+        <p class="form-hint">When the lecture is active, students verify their identity with a face scan to mark attendance.</p>
       </div>
       <div class="form-group">
         <label class="form-label">Attendance Marks (optional)</label>
@@ -335,22 +334,19 @@
   </div>
 </div>
 
-<!-- QR CODE MODAL -->
+<!-- FACE CHECK-IN LINK MODAL -->
 <div class="student-modal" id="qr-modal" style="display:none">
   <div class="modal-box qr-modal-box">
     <div class="modal-head">
-      <div class="modal-name">Smart Attendance QR</div>
+      <div class="modal-name">🤖 Face Check-In Link</div>
       <button class="modal-close" id="close-qr-modal">✕</button>
     </div>
     <div class="modal-body">
       <div class="qr-lecture-title" id="qr-lecture-title">—</div>
       <div class="qr-lecture-sub" id="qr-lecture-sub">—</div>
       <div class="qr-code-wrap"><div id="qr-code"></div></div>
-      <div class="qr-scan-hint">Students scan this code with their phone camera during the lecture to mark attendance.</div>
-      <div class="qr-code-display" id="qr-code-display">••••••</div>
-      <div class="qr-code-meta" id="qr-code-countdown"></div>
+      <div class="qr-scan-hint">Students scan this code with their phone camera to open the <strong>face check-in</strong> page — their identity is verified with a live face scan.</div>
       <div class="qr-code-meta" id="qr-rotation-countdown"></div>
-      <div class="qr-code-hint">Can't scan? Students can also type the 6-digit code above at <strong>/attend</strong> on their phone.</div>
       <div class="qr-count" id="qr-count">—</div>
       <div class="qr-link-row">
         <input type="text" id="qr-link" class="input" readonly/>
@@ -764,7 +760,7 @@ if (document.getElementById('lecturer-dashboard')) {
     }
   });
 
-  /* ── QR code modal (live: rotating token + rotating 6-digit code) ── */
+  /* ── Face check-in link modal (live: rotating QR link) ── */
   const qrModal = document.getElementById('qr-modal');
   let qrLectureId = null;
   let qrCurrentToken = null;
@@ -785,8 +781,6 @@ if (document.getElementById('lecturer-dashboard')) {
     document.getElementById('qr-lecture-title').textContent = lecture.title;
     document.getElementById('qr-lecture-sub').textContent = courseLabel(lecture.course_id);
     document.getElementById('qr-code').innerHTML = '';
-    document.getElementById('qr-code-display').textContent = '••••••';
-    document.getElementById('qr-code-countdown').textContent = '';
     document.getElementById('qr-rotation-countdown').textContent = '';
     document.getElementById('qr-link').value = '';
     document.getElementById('qr-count').textContent = '⏳ Loading…';
@@ -822,8 +816,6 @@ if (document.getElementById('lecturer-dashboard')) {
         host.innerHTML = '<p style="font-size:.8rem;color:var(--t-muted)">QR library unavailable.</p>';
       }
     }
-    const codeEl = document.getElementById('qr-code-display');
-    if (codeEl && res.data.code) codeEl.textContent = res.data.code;
     const countEl = document.getElementById('qr-count');
     if (countEl && res.data.attendance_count != null) {
       countEl.textContent = `${res.data.attendance_count} student${res.data.attendance_count !== 1 ? 's' : ''} marked attendance`;
@@ -834,15 +826,10 @@ if (document.getElementById('lecturer-dashboard')) {
   function renderQrTicks() {
     if (!qrData) return;
     const now = Date.now();
-    const cEl = document.getElementById('qr-code-countdown');
     const rEl = document.getElementById('qr-rotation-countdown');
-    if (cEl && qrData.code_expires_at) {
-      const s = Math.max(0, Math.round((new Date(qrData.code_expires_at).getTime() - now) / 1000));
-      cEl.textContent = `Code refreshes in ${s}s`;
-    }
     if (rEl && qrData.rotation_expires_at) {
       const s = Math.max(0, Math.round((new Date(qrData.rotation_expires_at).getTime() - now) / 1000));
-      rEl.textContent = `QR refreshes in ${s}s`;
+      rEl.textContent = `QR link refreshes in ${s}s`;
     }
   }
 

@@ -551,6 +551,35 @@ if (document.getElementById('admin-dashboard')) {
   /* ── Webcam face enrollment ── */
   let camStream = null;
   let capturedBlob = null;
+  let capturedEmbedding = null; // 128-dim FaceNet signature from the capture
+  let faceModelsReady = false;
+
+  async function ensureFaceModels() {
+    if (faceModelsReady) return true;
+    try {
+      await Promise.all([
+        faceapi.nets.tinyFaceDetector.loadFromUri('/assets/models'),
+        faceapi.nets.faceLandmark68Net.loadFromUri('/assets/models'),
+        faceapi.nets.faceRecognitionNet.loadFromUri('/assets/models'),
+      ]);
+      faceModelsReady = true;
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  async function computeEmbedding(canvas) {
+    if (!(await ensureFaceModels())) return null;
+    try {
+      const det = await faceapi.detectSingleFace(canvas, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 }))
+        .withFaceLandmarks()
+        .withFaceDescriptor();
+      return det ? Array.from(det.descriptor) : null;
+    } catch (e) {
+      return null;
+    }
+  }
 
   function stopCamera() {
     if (camStream) { camStream.getTracks().forEach(t => t.stop()); camStream = null; }
@@ -585,21 +614,36 @@ if (document.getElementById('admin-dashboard')) {
     const w = video.videoWidth || 640, h = video.videoHeight || 480;
     canvas.width = w; canvas.height = h;
     canvas.getContext('2d').drawImage(video, 0, 0, w, h);
-    canvas.toBlob(blob => {
+    canvas.toBlob(async blob => {
       capturedBlob = blob;
+      capturedEmbedding = null;
       canvas.style.display = 'block';
-      document.getElementById('fep-enroll-btn')?.removeAttribute('disabled');
+      document.getElementById('fep-enroll-btn')?.setAttribute('disabled', 'disabled');
       const capBtn = document.getElementById('fep-capture-btn');
+      if (capBtn) capBtn.textContent = '⏳ Creating face signature…';
+      // Compute the FaceNet identity signature from the captured frame — this
+      // is what students' face scans are verified against at check-in.
+      const embedding = await computeEmbedding(canvas);
+      capturedEmbedding = embedding;
       if (capBtn) capBtn.textContent = '✅ Captured';
-      showToast('success', 'Captured', 'Review the image, then enroll the face.');
+      if (embedding) {
+        document.getElementById('fep-enroll-btn')?.removeAttribute('disabled');
+        showToast('success', 'Face Detected', 'Identity signature created. Review the image, then enroll the face.');
+      } else {
+        showToast('error', 'No Face Detected', 'No face was found in the capture. Re-capture with the face clearly in the frame.');
+      }
     }, 'image/jpeg', 0.92);
   });
 
   document.getElementById('fep-enroll-btn')?.addEventListener('click', async () => {
     if (!capturedBlob || !selectedId) return;
+    if (!capturedEmbedding) {
+      showToast('error', 'No Face Signature', 'Re-capture the student face so a FaceNet signature can be created — it is required for face-scan check-in.');
+      return;
+    }
     const btn = document.getElementById('fep-enroll-btn');
     btn.disabled = true; btn.textContent = '⏳ Enrolling…';
-    const res = await API.admin.faceRegister(selectedId, capturedBlob);
+    const res = await API.admin.faceRegister(selectedId, capturedBlob, capturedEmbedding);
     btn.disabled = false; btn.textContent = '✅ Enroll Face';
     if (res.ok) {
       showToast('success', 'Face Enrolled', res.data.message || 'Facial registration recorded.');
@@ -616,7 +660,7 @@ if (document.getElementById('admin-dashboard')) {
   /* Stop camera when modal closes */
   window.closeStudentModal = function () {
     stopCamera();
-    capturedBlob = null; // never carry a face capture into the next student's modal
+    capturedBlob = null; capturedEmbedding = null; // never carry a face capture into the next student's modal
     const modal = document.getElementById('student-modal');
     modal?.classList.remove('open');
     setTimeout(() => { if (modal) modal.style.display = 'none'; selectedId = null; selectedStudent = null; }, 300);
@@ -646,7 +690,12 @@ if (document.getElementById('admin-dashboard')) {
 
     // Save the webcam capture first — records biometric verification + face photo
     if (!alreadyEnrolled && capturedBlob) {
-      const faceRes = await API.admin.faceRegister(selectedId, capturedBlob);
+      if (!capturedEmbedding) {
+        showToast('error', 'No Face Signature', 'Capture the student face so a FaceNet signature can be created before approving.');
+        btn.disabled = false; btn.textContent = '✅ Approve Registration';
+        return;
+      }
+      const faceRes = await API.admin.faceRegister(selectedId, capturedBlob, capturedEmbedding);
       if (!faceRes.ok) {
         btn.disabled = false;
         btn.textContent = '✅ Approve Registration';

@@ -70,6 +70,7 @@ Route::middleware(['auth:sanctum', 'role:student'])->group(function () {
     Route::get('/student/attendance',  [StudentController::class, 'attendance']);
     Route::get('/student/lectures',    [StudentController::class, 'lectures']);
     Route::post('/student/attend',     [StudentController::class, 'scanAttendance']);
+    Route::post('/student/lectures/{id}/face-checkin', [StudentController::class, 'faceCheckin']);
     Route::get('/student/notifications', [StudentController::class, 'notifications']);
     Route::put('/student/notifications/{id}/read', [StudentController::class, 'markNotificationRead']);
 });

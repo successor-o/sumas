@@ -45,24 +45,20 @@
 .lc-scan-btn:hover{background:var(--brand);color:#fff;box-shadow:var(--sh-brand)}
 .att-score{margin-top:2px}
 
-/* ── QR scan modal ── */
+/* ── Face scan modal ── */
 .scan-modal-box{max-width:460px}
 .scan-lecture{background:var(--surf-2);border:1px solid var(--bdr-light);border-radius:var(--r-lg);padding:12px 14px;margin-bottom:14px}
 .scan-lecture-course{font-family:var(--f-mono);font-size:.66rem;font-weight:700;letter-spacing:.6px;color:var(--brand);text-transform:uppercase}
 .scan-lecture-title{font-size:.95rem;font-weight:800;color:var(--t-primary);margin-top:3px}
 .scan-lecture-meta{font-size:.74rem;color:var(--t-muted);margin-top:3px;line-height:1.6}
-.scan-camera-wrap{position:relative;border-radius:var(--r-lg);overflow:hidden;background:#0f0f10;aspect-ratio:1/1}
+.scan-camera-wrap{position:relative;border-radius:var(--r-lg);overflow:hidden;background:#0f0f10;aspect-ratio:4/3}
 .scan-camera-wrap video{width:100%;height:100%;object-fit:cover;display:block}
-.scan-camera-wrap canvas{display:none}
 .scan-camera-overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;
-  color:rgba(255,255,255,.8);font-size:.84rem;text-align:center;padding:20px;line-height:1.5}
-.scan-frame{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:64%;height:64%;pointer-events:none}
-.scan-frame::before,.scan-frame::after{content:'';position:absolute;width:26px;height:26px;border:3px solid var(--g400);border-radius:4px}
-.scan-frame::before{top:-3px;left:-3px;border-right:none;border-bottom:none}
-.scan-frame::after{bottom:-3px;right:-3px;border-left:none;border-top:none}
-.scan-scanline{position:absolute;left:6%;right:6%;height:2px;top:18%;background:linear-gradient(90deg,transparent,var(--g400),transparent);
-  box-shadow:0 0 12px rgba(212,160,32,.8);animation:scanlineMove 2.2s ease-in-out infinite}
-@keyframes scanlineMove{0%,100%{top:16%}50%{top:80%}}
+  color:rgba(255,255,255,.85);font-size:.84rem;text-align:center;padding:20px;line-height:1.5;background:rgba(10,10,12,.55)}
+.scan-camera-overlay[hidden]{display:none}
+.face-frame{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:58%;height:58%;pointer-events:none;border-radius:999px;
+  border:3px solid rgba(212,160,32,.9);box-shadow:0 0 0 2000px rgba(0,0,0,.35),0 0 24px rgba(212,160,32,.45)}
+.face-frame.ok{border-color:var(--success);box-shadow:0 0 0 2000px rgba(0,0,0,.25),0 0 24px rgba(22,110,60,.55)}
 .scan-status{margin-top:14px}
 .scan-actions{margin-top:14px;display:flex;gap:var(--s3);flex-wrap:wrap}
 .scan-actions .btn{flex:1;min-width:150px}
@@ -574,32 +570,30 @@
 
 
 
-<!-- QR SCAN MODAL (camera check-in) -->
+<!-- FACE SCAN MODAL (camera check-in) -->
 <div class="student-modal" id="scan-modal" style="display:none">
   <div class="modal-box scan-modal-box">
     <div class="modal-head">
-      <div class="modal-name">📷 Scan Attendance QR</div>
+      <div class="modal-name">🤖 Face Scan Check-In</div>
       <button class="modal-close" id="close-scan-modal">✕</button>
     </div>
     <div class="modal-body">
       <div class="scan-lecture" id="scan-lecture-info"></div>
       <div class="scan-camera-wrap">
         <video id="scan-video" playsinline muted></video>
-        <canvas id="scan-canvas" width="480" height="480"></canvas>
         <div class="scan-camera-overlay" id="scan-camera-overlay">⏳ Starting camera…</div>
-        <div class="scan-frame" id="scan-frame" style="display:none"></div>
-        <div class="scan-scanline" id="scan-scanline" style="display:none"></div>
+        <div class="face-frame" id="scan-frame" hidden></div>
       </div>
       <div class="scan-err" id="scan-status" style="display:none"></div>
       <div class="scan-actions">
-        <button class="btn btn-primary btn-md" id="scan-open-attend">🔢 Enter code manually</button>
+        <button class="btn btn-primary btn-md" id="scan-retry-btn" style="display:none">🤖 Scan Again</button>
       </div>
-      <p class="scan-hint">Point your camera at the QR code on your lecturer’s screen. Check-in happens automatically when the code is recognised.</p>
+      <p class="scan-hint">Look at the camera and hold still. Your identity is verified against the face enrolled at the ICT office — check-in happens automatically.</p>
     </div>
   </div>
 </div>
 
-<script src="{{ asset('assets/js/vendor/jsqr.min.js') }}"></script>
+<script src="{{ asset('assets/js/vendor/face-api.min.js') }}"></script>
 <script src="{{ asset('assets/js/api.js') }}"></script>
 <script src="{{ asset('assets/js/app.js') }}"></script>
 </body>

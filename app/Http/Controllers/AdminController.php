@@ -117,13 +117,18 @@ class AdminController extends Controller
 
     /**
      * Record facial registration — admin captures the student's face via webcam
-     * and uploads the image here (multipart: face_image).
+     * and uploads the image here (multipart: face_image + optional face_embedding).
      * POST /api/admin/students/{id}/face-register
+     *
+     * `face_embedding` is the 128-dim FaceNet descriptor computed in the browser
+     * (face-api.js) from the captured photo. It is what attendance check-in
+     * compares against, so students without an embedding cannot face-check-in.
      */
     public function faceRegister(Request $request, int $id): JsonResponse
     {
         $validator = Validator::make($request->all() + $request->allFiles(), [
             'face_image' => 'required|image|mimes:jpeg,jpg,png,webp|max:5120',
+            'face_embedding' => 'sometimes|json',
         ]);
 
         if ($validator->fails()) {
@@ -134,6 +139,19 @@ class AdminController extends Controller
         }
 
         $user = User::students()->findOrFail($id);
+
+        // Decode + sanity-check the FaceNet embedding when one was sent.
+        $embedding = null;
+        if ($request->filled('face_embedding')) {
+            $decoded = json_decode($request->input('face_embedding'), true);
+            if (is_array($decoded) && count($decoded) === 128 && collect($decoded)->every(fn ($v) => is_numeric($v))) {
+                $embedding = array_values(array_map('floatval', $decoded));
+            } else {
+                return response()->json([
+                    'message' => 'The face signature is invalid (expected 128 numeric values). Re-capture the face.',
+                ], 422);
+            }
+        }
 
         // Remove any previously enrolled face photo.
         if ($user->face_photo) {
@@ -151,6 +169,7 @@ class AdminController extends Controller
             'verified' => true,
             'face_enrolled_at' => now(),
             'face_photo' => $stored,
+            'face_embedding' => $embedding,
         ]);
 
         return response()->json([
@@ -812,6 +831,7 @@ class AdminController extends Controller
             'verified' => $u->verified,
             'face_enrolled_at' => $u->face_enrolled_at,
             'face_photo' => $u->face_photo ? Storage::disk('public')->url($u->face_photo) : null,
+            'face_ready' => $u->hasFaceEnrolled(),
             'docs_count' => $u->docs_count,
             'status' => $u->status,
             'created_at' => $u->created_at,

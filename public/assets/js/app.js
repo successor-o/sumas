@@ -819,7 +819,7 @@ if (document.getElementById('student-dashboard')) {
   function renderAttendance(attendances) {
     const container = document.getElementById('attendance-list');
     if (!attendances.length) {
-      container.innerHTML = '<p style="color:var(--t-muted)">No attendance records yet. Attend a lecture and scan the lecturer\'s QR code — your records will appear here.</p>';
+      container.innerHTML = '<p style="color:var(--t-muted)">No attendance records yet. Check in to a live lecture with a face scan — your records will appear here.</p>';
       return;
     }
     container.innerHTML = attendances.map(a => `
@@ -832,7 +832,7 @@ if (document.getElementById('student-dashboard')) {
         </div>
         <div class="att-card-side">
           <span class="badge ${a.status === 'present' ? 'badge-green' : a.status === 'late' ? 'badge-gold' : 'badge-red'}">${escHtml(a.status)}</span>
-          ${a.source ? `<span class="badge badge-gray att-source">${a.source === 'qr' ? '📱 QR' : '✍️ Manual'}</span>` : ''}
+          ${a.source ? `<span class="badge badge-gray att-source">${a.source === 'face' ? '🤖 Face' : a.source === 'qr' ? '📱 QR' : '✍️ Manual'}</span>` : ''}
           ${a.attendance_score != null && a.status !== 'absent' ? `<span class="badge badge-brand att-score">🎯 +${a.attendance_score} marks</span>` : ''}
         </div>
       </div>
@@ -876,8 +876,8 @@ if (document.getElementById('student-dashboard')) {
         ${attended
           ? `<div class="lecture-card-foot attended">✅ Attendance recorded${attended === 'late' ? ' (Late)' : ''}${l.attendance_score != null ? ` · 🎯 +${l.attendance_score} marks` : ''}</div>`
           : scannable
-            ? `<div class="lecture-card-foot live">${marks ? marks + '<br/>' : ''}📲 ${l.gps_required ? '📍 Location required — ' : ''}Tap to scan the QR code shown by your lecturer.</div>
-               <button class="lc-scan-btn" data-scan-id="${l.id}">📷 Scan QR to check in</button>`
+            ? `<div class="lecture-card-foot live">${marks ? marks + '<br/>' : ''}📲 ${l.gps_required ? '📍 Location required — ' : ''}Tap to check in with a face scan.</div>
+               <button class="lc-scan-btn" data-scan-id="${l.id}">🤖 Scan Face to Check In</button>`
             : live
               ? '<div class="lecture-card-foot">Attendance for this lecture is recorded manually by your lecturer.</div>'
               : ''}
@@ -894,29 +894,44 @@ if (document.getElementById('student-dashboard')) {
     });
   }
 
-  /* ── QR scan modal (camera check-in) ── */
+  /* ── Face scan modal (camera check-in) ── */
   const scanModal = document.getElementById('scan-modal');
   const scanVideo = document.getElementById('scan-video');
-  const scanCanvas = document.getElementById('scan-canvas');
+  const FACE_MODEL_URL = '/assets/models';
+  let faceModelsReady = false;
   let scanStream = null;
   let scanRaf = null;
   let scanLecture = null;
   let scanLocked = false;
+  let faceStable = 0;
+
+  async function ensureFaceModels() {
+    if (faceModelsReady) return true;
+    try {
+      await Promise.all([
+        faceapi.nets.tinyFaceDetector.loadFromUri(FACE_MODEL_URL),
+        faceapi.nets.faceLandmark68Net.loadFromUri(FACE_MODEL_URL),
+        faceapi.nets.faceRecognitionNet.loadFromUri(FACE_MODEL_URL),
+      ]);
+      faceModelsReady = true;
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
 
   function stopCamera() {
     if (scanRaf) { cancelAnimationFrame(scanRaf); scanRaf = null; }
     if (scanStream) { scanStream.getTracks().forEach(t => t.stop()); scanStream = null; }
   }
 
-  function showScanOverlay(msg) {
+  function showScanOverlay(msg, ok) {
     const o = document.getElementById('scan-camera-overlay');
-    if (o) { o.style.display = msg ? 'flex' : 'none'; o.innerHTML = escHtml(msg || ''); }
+    if (o) { o.hidden = !msg; o.textContent = msg || ''; }
+    const f = document.getElementById('scan-frame');
+    if (f) { f.hidden = !msg; f.classList.toggle('ok', !!ok); }
   }
   function hideScanOverlay() { showScanOverlay(''); }
-  function showScanFrame(on) {
-    document.getElementById('scan-frame').style.display = on ? 'block' : 'none';
-    document.getElementById('scan-scanline').style.display = on ? 'block' : 'none';
-  }
   function setScanStatus(kind, msg) {
     const el = document.getElementById('scan-status');
     if (!el) return;
@@ -930,6 +945,7 @@ if (document.getElementById('student-dashboard')) {
     if (!lecture) return;
     scanLecture = lecture;
     scanLocked = false;
+    faceStable = 0;
     document.getElementById('scan-lecture-info').innerHTML =
       '<div class="scan-lecture-course">' + escHtml(lecture.course_code) + ' · ' + escHtml(lecture.course_name) + '</div>' +
       '<div class="scan-lecture-title">' + escHtml(lecture.title) + '</div>' +
@@ -938,13 +954,10 @@ if (document.getElementById('student-dashboard')) {
       (lecture.gps_required ? '<br/>📍 Location required — make sure location is enabled' : '') +
       '</div>';
     setScanStatus('', '');
-    const attendBtn = document.getElementById('scan-open-attend');
-    attendBtn.textContent = '🔢 Enter code manually';
-    attendBtn.onclick = () => { window.location.href = '/attend'; };
-    showScanFrame(false);
+    const retryBtn = document.getElementById('scan-retry-btn');
+    if (retryBtn) retryBtn.style.display = 'none';
+    showScanOverlay('⏳ Preparing face AI…', true);
     scanModal.style.display = 'flex'; void scanModal.offsetWidth; scanModal.classList.add('open');
-    if (typeof jsQR !== 'function') { noCameraFallback(); return; }
-    showScanOverlay('⏳ Starting camera…');
     startScanner();
   }
 
@@ -956,68 +969,55 @@ if (document.getElementById('student-dashboard')) {
   }
 
   async function startScanner() {
+    if (!(await ensureFaceModels())) {
+      showScanOverlay('');
+      setScanStatus('error', 'The face AI could not be loaded. Check your internet connection and try again.');
+      return;
+    }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      noCameraFallback();
+      return;
+    }
     try {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        noCameraFallback();
-        return;
-      }
       scanStream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 640 } },
+        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
         audio: false,
       });
       scanVideo.srcObject = scanStream;
       await scanVideo.play();
-      hideScanOverlay();
-      showScanFrame(true);
-      decodeLoop();
+      showScanOverlay('Look at the camera — scanning…', true);
+      detectLoop();
     } catch (err) {
       noCameraFallback();
     }
   }
 
   function noCameraFallback() {
-    showScanOverlay('📷 Camera unavailable or permission denied.<br/>Use the button below to enter the 6-digit code instead.');
-    showScanFrame(false);
-    const btn = document.getElementById('scan-open-attend');
-    if (btn) btn.textContent = '🔢 Enter the 6-digit code';
+    showScanOverlay('');
+    setScanStatus('error', '📷 Camera unavailable or permission denied. Allow camera access in your browser and try again.');
   }
 
-  function decodeLoop() {
-    if (!scanStream) return;
-    const ctx = scanCanvas.getContext('2d', { willReadFrequently: true });
-    if (scanVideo.videoWidth) {
-      scanCanvas.width = scanVideo.videoWidth;
-      scanCanvas.height = scanVideo.videoHeight;
-      ctx.drawImage(scanVideo, 0, 0, scanCanvas.width, scanCanvas.height);
-      const img = ctx.getImageData(0, 0, scanCanvas.width, scanCanvas.height);
-      const result = (typeof jsQR === 'function') ? jsQR(img.data, img.width, img.height) : null;
-      if (result && result.data) {
-        const token = extractToken(result.data);
-        if (token) {
-          handleScannedToken(token);
-          return;
-        }
-      }
-    }
-    scanRaf = requestAnimationFrame(decodeLoop);
+  function detectLoop() {
+    if (!scanStream || scanLocked) return;
+    if (!scanVideo.videoWidth) { scanRaf = requestAnimationFrame(detectLoop); return; }
+    faceapi.detectSingleFace(scanVideo, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 }))
+      .withFaceLandmarks()
+      .withFaceDescriptor()
+      .then(result => {
+        if (!result) { faceStable = 0; scanRaf = requestAnimationFrame(detectLoop); return; }
+        faceStable++;
+        if (faceStable >= 2) { markAttendance(Array.from(result.descriptor)); return; }
+        scanRaf = requestAnimationFrame(detectLoop);
+      })
+      .catch(() => { scanRaf = requestAnimationFrame(detectLoop); });
   }
 
-  function extractToken(text) {
-    const m = String(text || '').match(/\/attend\/([A-Za-z0-9]+)/);
-    return m ? m[1] : null;
-  }
-
-  async function handleScannedToken(token) {
+  async function markAttendance(embedding) {
     if (scanLocked) return;
     scanLocked = true;
     stopCamera();
-    showScanFrame(false);
-    showScanOverlay('✅ Code found — checking you in…');
-    await markAttendance(token);
-  }
-
-  async function markAttendance(token) {
-    const payload = { token, device_id: API.deviceId() };
+    showScanOverlay('🤖 Verifying your face…', true);
+    const payload = { embedding, device_id: API.deviceId() };
     if (scanLecture && scanLecture.gps_required) {
       setScanStatus('warn', '📍 Getting your location…');
       const pos = await API.getPosition(10000);
@@ -1029,16 +1029,14 @@ if (document.getElementById('student-dashboard')) {
       payload.latitude = pos.lat;
       payload.longitude = pos.lng;
     }
-    const res = await API.post('/student/attend', payload);
+    const res = await API.student.faceCheckin(scanLecture.id, payload);
     if (res.ok) {
       const score = res.data.attendance && res.data.attendance.attendance_score;
       hideScanOverlay();
-      setScanStatus('success', '<strong>✅ Attendance marked!</strong><br/>You are recorded as present' +
+      setScanStatus('success', '<strong>✅ Attendance marked!</strong><br/>Your face was verified and you are recorded as present' +
         (score != null ? ` and earned <strong>+${score} marks</strong>` : '') + '. Enjoy the lecture!');
-      const btn = document.getElementById('scan-open-attend');
-      btn.textContent = '🎉 Go to my attendance →';
-      btn.onclick = () => { closeScanModal(); showSection('attendance'); };
       loadLectures(); // refresh the ✓ badge on the card
+      setTimeout(closeScanModal, 2600);
       return;
     }
     if (res.status === 401) {
@@ -1048,14 +1046,17 @@ if (document.getElementById('student-dashboard')) {
     }
     scanLocked = false;
     const msg = res.data.message || 'Could not mark attendance.';
-    setScanStatus('error', escHtml(msg) + ' <a href="/attend" style="color:var(--brand);font-weight:700">Enter code manually →</a>' +
-      '<div style="margin-top:12px"><button class="btn btn-secondary btn-md" id="scan-retry-btn">📷 Scan again</button></div>');
+    setScanStatus('error', escHtml(msg));
     const retryBtn = document.getElementById('scan-retry-btn');
-    if (retryBtn) retryBtn.onclick = () => {
-      setScanStatus('', '');
-      showScanFrame(true);
-      startScanner();
-    };
+    if (retryBtn) {
+      retryBtn.style.display = '';
+      retryBtn.onclick = () => {
+        setScanStatus('', '');
+        scanLocked = false;
+        faceStable = 0;
+        startScanner();
+      };
+    }
   }
 
   document.getElementById('close-scan-modal')?.addEventListener('click', closeScanModal);

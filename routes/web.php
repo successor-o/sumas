@@ -27,7 +27,8 @@ Route::get('/attend/{token}', function (string $token) {
     return view('attend', ['token' => $token]);
 });
 
-// Manual 6-digit code entry (no QR scan) — same check-in page without a token.
+// /attend without a token (opened directly) — the page explains that the
+// lecturer's QR link is required to open a face check-in.
 Route::get('/attend', function () {
     return view('attend', ['token' => null]);
 });

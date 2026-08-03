@@ -133,7 +133,6 @@ class LecturerController extends Controller
             'token_rotated_at' => now(),
             'is_active' => true,
             'attendance_enabled' => $request->boolean('attendance_enabled', true),
-            'totp_secret' => Str::random(32),
             'gps_required' => $request->boolean('gps_required'),
             'latitude' => $request->filled('latitude') ? $request->input('latitude') : null,
             'longitude' => $request->filled('longitude') ? $request->input('longitude') : null,
@@ -161,11 +160,12 @@ class LecturerController extends Controller
     }
 
     /**
-     * Live attendance code for the QR modal (polled by the frontend).
+     * Live check-in link for the QR modal (polled by the frontend).
      * GET /api/lecturer/lectures/{id}/live
      *
      * Lazily rotates the token when its interval has elapsed, and returns the
-     * current QR url, the rotating 6-digit code and their expiry timestamps.
+     * current QR url and rotation countdown. The QR is now just a link to the
+     * face-scan check-in page — identity is verified by face, not by the code.
      */
     public function liveCode(Request $request, int $id): JsonResponse
     {
@@ -184,8 +184,6 @@ class LecturerController extends Controller
             'token' => $lecture->token,
             'previous_token' => $lecture->previous_token,
             'qr_url' => url('/attend/' . $lecture->token),
-            'code' => $lecture->totp(),
-            'code_expires_at' => $lecture->totpExpiresAt()->toIso8601String(),
             'rotation_expires_at' => $lecture->token_rotated_at
                 ->addSeconds((int) config('attendance.rotation_seconds', 60))
                 ->toIso8601String(),

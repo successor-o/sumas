@@ -142,6 +142,7 @@ class StudentController extends Controller
             'verified' => $user->verified,
             'face_enrolled_at' => $user->face_enrolled_at,
             'face_photo' => $user->face_photo ? Storage::disk('public')->url($user->face_photo) : null,
+            'face_ready' => $user->hasFaceEnrolled(),
             'docs_count' => $user->docs_count,
             'created_at' => $user->created_at,
             'updated_at' => $user->updated_at,
@@ -341,14 +342,20 @@ class StudentController extends Controller
     }
 
     /**
-     * Mark attendance via QR token or the rotating 6-digit code.
-     * POST /api/student/attend  { token | code, device_id, latitude?, longitude? }
+     * Mark attendance via a face scan.
+     * POST /api/student/attend  { token, embedding, device_id, latitude?, longitude? }
+     *
+     * The student's browser computes a 128-dim FaceNet embedding of their live
+     * face (face-api.js) and sends it here; it is compared against the embedding
+     * captured at enrollment. The QR token only identifies the lecture.
      *
      * Guard rails:
      *  - Lecture must exist, be active and have smart attendance enabled.
      *  - QR token rotates every rotation_seconds; the previous token stays valid
      *    for one rotation window (grace).
-     *  - The 6-digit code is a rotating TOTP (±1 step window).
+     *  - The student must be face-enrolled (has a stored embedding).
+     *  - The live embedding must match the enrolled one (cosine similarity ≥
+     *    the configured threshold).
      *  - Optional GPS geofence when the lecture requires location.
      *  - A device that already marked ANY student for this lecture is locked out
      *    (stops one phone being passed around the class).
@@ -359,8 +366,9 @@ class StudentController extends Controller
     public function scanAttendance(Request $request): JsonResponse
     {
         $validator = Validator::make($request->all(), [
-            'token' => 'required_without:code|string',
-            'code' => 'required_without:token|string',
+            'token' => 'required|string',
+            'embedding' => ['required', 'array', 'size:128'],
+            'embedding.*' => ['numeric'],
             'device_id' => 'required|string|max:64',
             'latitude' => 'sometimes|nullable|numeric|between:-90,90',
             'longitude' => 'sometimes|nullable|numeric|between:-180,180',
@@ -370,40 +378,66 @@ class StudentController extends Controller
             return response()->json(['message' => 'Validation failed.', 'errors' => $validator->errors()], 422);
         }
 
-        $user = $request->user();
+        $token = $request->token;
+        $lecture = Lecture::where(fn ($q) => $q->where('token', $token)->orWhere('previous_token', $token))->first();
 
-        // Resolve the lecture: by rotating QR token, or by the 6-digit TOTP code.
-        if ($request->filled('code')) {
-            $lecture = Lecture::where('is_active', true)
-                ->where('attendance_enabled', true)
-                ->get()
-                ->first(fn ($l) => $l->validateTotp($request->code));
-
-            if (! $lecture) {
-                return response()->json(['message' => 'Invalid or expired code. Check the number and try again.'], 422);
-            }
-        } else {
-            $token = $request->token;
-            $lecture = Lecture::where(fn ($q) => $q->where('token', $token)->orWhere('previous_token', $token))->first();
-
-            if (! $lecture) {
-                return response()->json(['message' => 'Invalid or expired attendance code.'], 404);
-            }
-
-            // May rotate lazily; the matched token stays valid as the previous one.
-            $lecture->ensureFreshToken();
-
-            if (! $lecture->matchesToken($token)) {
-                return response()->json(['message' => 'This code has expired. Ask your lecturer to refresh the QR code.'], 422);
-            }
+        if (! $lecture) {
+            return response()->json(['message' => 'Invalid or expired attendance link. Ask your lecturer to show the QR code again.'], 404);
         }
 
+        // May rotate lazily; the matched token stays valid as the previous one.
+        $lecture->ensureFreshToken();
+
+        if (! $lecture->matchesToken($token)) {
+            return response()->json(['message' => 'This attendance link has expired. Ask your lecturer to refresh the QR code.'], 422);
+        }
+
+        return $this->completeFaceCheckin($request, $request->user(), $lecture);
+    }
+
+    /**
+     * Face check-in from the student portal, by lecture id.
+     * POST /api/student/lectures/{id}/face-checkin
+     * { embedding, device_id, latitude?, longitude? }
+     *
+     * Lets a student check in straight from their dashboard for a live lecture
+     * without needing to scan the lecturer's QR link (no token is exposed in
+     * the lectures payload). Shares every guard with scanAttendance.
+     */
+    public function faceCheckin(Request $request, int $lectureId): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'embedding' => ['required', 'array', 'size:128'],
+            'embedding.*' => ['numeric'],
+            'device_id' => 'required|string|max:64',
+            'latitude' => 'sometimes|nullable|numeric|between:-90,90',
+            'longitude' => 'sometimes|nullable|numeric|between:-180,180',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['message' => 'Validation failed.', 'errors' => $validator->errors()], 422);
+        }
+
+        $lecture = Lecture::find($lectureId);
+
+        if (! $lecture) {
+            return response()->json(['message' => 'Lecture not found.'], 404);
+        }
+
+        return $this->completeFaceCheckin($request, $request->user(), $lecture);
+    }
+
+    /**
+     * Shared face-scan check-in: identity verification + attendance creation.
+     */
+    private function completeFaceCheckin(Request $request, User $user, Lecture $lecture): JsonResponse
+    {
         if (! $lecture->is_active) {
             return response()->json(['message' => 'This lecture has ended. Attendance is closed.'], 422);
         }
 
         if (! $lecture->attendance_enabled) {
-            return response()->json(['message' => 'Smart attendance is not enabled for this lecture.'], 422);
+            return response()->json(['message' => 'Face check-in is not enabled for this lecture.'], 422);
         }
 
         // Optional GPS geofence — the student must be near the lecture venue.
@@ -421,6 +455,17 @@ class StudentController extends Controller
             if ($distance > $radius) {
                 return response()->json(['message' => 'You are outside the lecture location (' . round($radius) . 'm). Move closer and try again.'], 422);
             }
+        }
+
+        // Biometric identity: the student must be enrolled, and the live scan
+        // must match their enrolled FaceNet embedding.
+        if (! $user->hasFaceEnrolled()) {
+            return response()->json(['message' => 'Your face is not enrolled yet. Visit the ICT office so an administrator can enroll your face before checking in.'], 422);
+        }
+
+        $embedding = array_values(array_map('floatval', $request->input('embedding')));
+        if (! $user->verifyFace($embedding)) {
+            return response()->json(['message' => 'Face did not match the enrolled identity. Make sure the camera is clear and try again.'], 422);
         }
 
         // One scan per student first (friendlier message on a re-scan), then
@@ -456,12 +501,12 @@ class StudentController extends Controller
             'lecturer_id' => $lecture->lecturer_id,
             'lecture_date' => $lecture->scheduled_date,
             'status' => 'present',
-            'source' => 'qr',
+            'source' => 'face',
             'device_id' => $request->device_id,
         ]);
 
         return response()->json([
-            'message' => 'Attendance marked successfully. Enjoy the lecture!',
+            'message' => 'Face verified — attendance marked successfully. Enjoy the lecture!',
             'attendance' => $this->formatAttendance($attendance),
         ], 201);
     }

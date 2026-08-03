@@ -768,7 +768,7 @@
               <button class="btn btn-gold btn-md" id="fep-capture-btn" disabled>📸 Capture</button>
               <button class="btn btn-success btn-md" id="fep-enroll-btn" disabled>✅ Enroll Face</button>
             </div>
-            <p class="fep-hint">Position the student's face in the frame, then capture and enroll.</p>
+            <p class="fep-hint">Position the student's face in the frame, then capture and enroll. A FaceNet identity signature is created automatically — students use it to check in with a face scan.</p>
           </div>
         </div>
       </div>
@@ -788,6 +788,7 @@
   </div>
 </div>
 
+<script src="{{ asset('assets/js/vendor/face-api.min.js') }}"></script>
 <script src="{{ asset('assets/js/api.js') }}"></script>
 <script src="{{ asset('assets/js/admin.js') }}"></script>
 </body>

@@ -10,17 +10,21 @@ use App\Models\Lecturer;
 use App\Models\Notification;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
 /**
- * Smart attendance — QR check-in flow:
+ * Smart attendance — face-scan check-in flow:
  *
- *  - Creating a lecture generates a QR token + optional attendance toggle and
- *    notifies the lecture audience.
- *  - Students check in by POSTing the token + their device id; one scan per
- *    student, one scan per device, and nothing after the lecture ends.
+ *  - Creating a lecture generates a QR link token + optional attendance toggle
+ *    and notifies the lecture audience.
+ *  - Students check in by POSTing a live FaceNet embedding (computed in the
+ *    browser) + their device id; the server compares it against the embedding
+ *    captured at enrollment. One scan per student, one per device, nothing
+ *    after the lecture ends.
  *  - Lecturers can still record attendance manually per lecture.
  *  - The student portal reflects marked attendance.
  */
@@ -66,7 +70,37 @@ class SmartAttendanceTest extends TestCase
             'status' => 'Approved',
             'dept'   => 'Computer Science',
             'matric' => 'SUMAS/CS/2023/' . str_pad((string) $n, 3, '0', STR_PAD_LEFT),
+            // Students are face-enrolled by default — override with
+            // ['face_embedding' => null] to simulate a not-yet-enrolled student.
+            'face_embedding' => $this->embedding(1.0),
         ], $overrides));
+    }
+
+    /** Deterministic 128-dim FaceNet-like unit embedding. */
+    private function embedding(float $seed): array
+    {
+        $v = [];
+        for ($i = 0; $i < 128; $i++) {
+            $v[] = sin($seed * 2.0 + $i * 0.7) + cos($seed * 3.0 + $i * 0.3);
+        }
+        $norm = sqrt(array_sum(array_map(fn ($x) => $x * $x, $v)));
+
+        return array_map(fn ($x) => $x / $norm, $v);
+    }
+
+    /** A live scan that should match the enrolled face (tiny perturbation). */
+    private function matchingScan(): array
+    {
+        $e = $this->embedding(1.0);
+        $e[0] += 0.0001;
+
+        return $e;
+    }
+
+    /** A live scan that must NOT match the enrolled face (cosine = -1). */
+    private function wrongScan(): array
+    {
+        return array_map(fn ($x) => -$x, $this->embedding(1.0));
     }
 
     private function makeLecture(Lecturer $lecturer, Course $course, array $overrides = []): Lecture
@@ -79,7 +113,6 @@ class SmartAttendanceTest extends TestCase
             'scheduled_date'     => now()->addHour(),
             'token'              => Str::random(20),
             'token_rotated_at'   => now(),
-            'totp_secret'        => Str::random(32),
             'attendance_enabled' => true,
             'is_active'          => true,
         ], $overrides));
@@ -177,6 +210,7 @@ class SmartAttendanceTest extends TestCase
         Sanctum::actingAs($student, ['role:student']);
         $this->postJson('/api/student/attend', [
             'token'     => $lecture->token,
+            'embedding' => $this->matchingScan(),
             'device_id' => 'device-marks-1',
         ])->assertCreated();
 
@@ -198,18 +232,19 @@ class SmartAttendanceTest extends TestCase
 
         $res = $this->postJson('/api/student/attend', [
             'token'     => $lecture->token,
+            'embedding' => $this->matchingScan(),
             'device_id' => 'device-abc-123',
         ]);
 
         $res->assertCreated()
             ->assertJsonPath('attendance.status', 'present')
-            ->assertJsonPath('attendance.source', 'qr');
+            ->assertJsonPath('attendance.source', 'face');
 
         $this->assertDatabaseHas('attendances', [
             'student_id' => $student->id,
             'lecture_id' => $lecture->id,
             'status'     => 'present',
-            'source'     => 'qr',
+            'source'     => 'face',
             'device_id'  => 'device-abc-123',
         ]);
     }
@@ -226,11 +261,13 @@ class SmartAttendanceTest extends TestCase
 
         $this->postJson('/api/student/attend', [
             'token'     => $lecture->token,
+            'embedding' => $this->matchingScan(),
             'device_id' => 'device-1',
         ])->assertCreated();
 
         $res = $this->postJson('/api/student/attend', [
             'token'     => $lecture->token,
+            'embedding' => $this->matchingScan(),
             'device_id' => 'device-2', // different device, same student
         ]);
 
@@ -250,6 +287,7 @@ class SmartAttendanceTest extends TestCase
         Sanctum::actingAs($student1, ['role:student']);
         $this->postJson('/api/student/attend', [
             'token'     => $lecture->token,
+            'embedding' => $this->matchingScan(),
             'device_id' => 'shared-phone',
         ])->assertCreated();
 
@@ -257,6 +295,7 @@ class SmartAttendanceTest extends TestCase
         Sanctum::actingAs($student2, ['role:student']);
         $res = $this->postJson('/api/student/attend', [
             'token'     => $lecture->token,
+            'embedding' => $this->matchingScan(),
             'device_id' => 'shared-phone',
         ]);
 
@@ -277,6 +316,7 @@ class SmartAttendanceTest extends TestCase
 
         $res = $this->postJson('/api/student/attend', [
             'token'     => $lecture->token,
+            'embedding' => $this->matchingScan(),
             'device_id' => 'device-x',
         ]);
 
@@ -292,6 +332,7 @@ class SmartAttendanceTest extends TestCase
 
         $this->postJson('/api/student/attend', [
             'token'     => 'does-not-exist',
+            'embedding' => $this->matchingScan(),
             'device_id' => 'device-x',
         ])->assertStatus(404);
     }
@@ -308,6 +349,7 @@ class SmartAttendanceTest extends TestCase
 
         $res = $this->postJson('/api/student/attend', [
             'token'     => $lecture->token,
+            'embedding' => $this->matchingScan(),
             'device_id' => 'device-y',
         ]);
 
@@ -358,7 +400,7 @@ class SmartAttendanceTest extends TestCase
             'lecturer_id'  => $lecturer->id,
             'lecture_date' => $lecture->scheduled_date,
             'status'       => 'present',
-            'source'       => 'qr',
+            'source'       => 'face',
         ]);
 
         Sanctum::actingAs($student, ['role:student']);
@@ -408,13 +450,13 @@ class SmartAttendanceTest extends TestCase
 
         $this->assertNotSame('OLD-TOKEN-0000000000', $newToken);
         $this->assertSame('OLD-TOKEN-0000000000', $live->json('previous_token'));
-        $this->assertMatchesRegularExpression('/^\d{6}$/', $live->json('code'));
 
         // The rotated-out token still works (one rotation grace window).
         $student = $this->makeStudent();
         Sanctum::actingAs($student, ['role:student']);
         $this->postJson('/api/student/attend', [
             'token'     => 'OLD-TOKEN-0000000000',
+            'embedding' => $this->matchingScan(),
             'device_id' => 'device-grace',
         ])->assertCreated();
 
@@ -423,6 +465,7 @@ class SmartAttendanceTest extends TestCase
         Sanctum::actingAs($student2, ['role:student']);
         $this->postJson('/api/student/attend', [
             'token'     => $newToken,
+            'embedding' => $this->matchingScan(),
             'device_id' => 'device-fresh',
         ])->assertCreated();
 
@@ -431,6 +474,7 @@ class SmartAttendanceTest extends TestCase
         Sanctum::actingAs($student3, ['role:student']);
         $this->postJson('/api/student/attend', [
             'token'     => 'MADE-UP-TOKEN-0000',
+            'embedding' => $this->matchingScan(),
             'device_id' => 'device-bogus',
         ])->assertStatus(404);
     }
@@ -458,38 +502,143 @@ class SmartAttendanceTest extends TestCase
         // after the interval elapses).
         $live = $this->getJson('/api/lecturer/lectures/' . $id . '/live');
         $live->assertOk()->assertJsonPath('token', $token);
-        $this->assertMatchesRegularExpression('/^\d{6}$/', $live->json('code'));
+        $this->assertStringContainsString('/attend/' . $token, $live->json('qr_url'));
     }
 
-    public function test_student_can_check_in_with_the_rotating_code(): void
+    public function test_6_digit_code_is_no_longer_accepted(): void
     {
         $dept     = $this->makeDept();
         $course   = $this->makeCourse($dept);
         $lecturer = $this->makeLecturer();
         $lecture  = $this->makeLecture($lecturer, $course);
+        $student  = $this->makeStudent();
 
-        Sanctum::actingAs($lecturer, ['role:lecturer']);
-        $code = $this->getJson('/api/lecturer/lectures/' . $lecture->id . '/live')->json('code');
-
-        $student = $this->makeStudent();
         Sanctum::actingAs($student, ['role:student']);
 
         $res = $this->postJson('/api/student/attend', [
-            'code'      => $code,
+            'code'      => '123456',
             'device_id' => 'device-code-1',
         ]);
 
+        $res->assertStatus(422);
+        $this->assertDatabaseMissing('attendances', ['student_id' => $student->id, 'lecture_id' => $lecture->id]);
+    }
+
+    public function test_student_without_enrolled_face_cannot_check_in(): void
+    {
+        $dept     = $this->makeDept();
+        $course   = $this->makeCourse($dept);
+        $lecturer = $this->makeLecturer();
+        $lecture  = $this->makeLecture($lecturer, $course);
+        $student  = $this->makeStudent(['face_embedding' => null]);
+
+        Sanctum::actingAs($student, ['role:student']);
+
+        $res = $this->postJson('/api/student/attend', [
+            'token'     => $lecture->token,
+            'embedding' => $this->matchingScan(),
+            'device_id' => 'device-no-enroll',
+        ]);
+
+        $res->assertStatus(422);
+        $this->assertStringContainsString('not enrolled', $res->json('message'));
+        $this->assertDatabaseMissing('attendances', ['student_id' => $student->id, 'lecture_id' => $lecture->id]);
+    }
+
+    public function test_face_mismatch_is_rejected(): void
+    {
+        $dept     = $this->makeDept();
+        $course   = $this->makeCourse($dept);
+        $lecturer = $this->makeLecturer();
+        $lecture  = $this->makeLecture($lecturer, $course);
+        $student  = $this->makeStudent(); // enrolled with embedding(1.0)
+
+        Sanctum::actingAs($student, ['role:student']);
+
+        $res = $this->postJson('/api/student/attend', [
+            'token'     => $lecture->token,
+            'embedding' => $this->wrongScan(),
+            'device_id' => 'device-wrong-face',
+        ]);
+
+        $res->assertStatus(422);
+        $this->assertStringContainsString('did not match', $res->json('message'));
+        $this->assertDatabaseMissing('attendances', ['student_id' => $student->id, 'lecture_id' => $lecture->id]);
+    }
+
+    public function test_student_can_check_in_from_dashboard_by_lecture_id(): void
+    {
+        $dept     = $this->makeDept();
+        $course   = $this->makeCourse($dept);
+        $lecturer = $this->makeLecturer();
+        $lecture  = $this->makeLecture($lecturer, $course);
+        $student  = $this->makeStudent();
+
+        Sanctum::actingAs($student, ['role:student']);
+
+        $res = $this->postJson('/api/student/lectures/' . $lecture->id . '/face-checkin', [
+            'embedding' => $this->matchingScan(),
+            'device_id' => 'device-dash-1',
+        ]);
+
         $res->assertCreated()
-            ->assertJsonPath('attendance.source', 'qr')
+            ->assertJsonPath('attendance.source', 'face')
             ->assertJsonPath('attendance.lecture_id', $lecture->id);
 
-        // A wrong code is rejected.
+        // A mismatching face is rejected on this endpoint too.
         $student2 = $this->makeStudent();
         Sanctum::actingAs($student2, ['role:student']);
-        $this->postJson('/api/student/attend', [
-            'code'      => '000000',
-            'device_id' => 'device-code-2',
-        ])->assertStatus(422);
+        $res = $this->postJson('/api/student/lectures/' . $lecture->id . '/face-checkin', [
+            'embedding' => $this->wrongScan(),
+            'device_id' => 'device-dash-2',
+        ]);
+        $res->assertStatus(422);
+    }
+
+    public function test_face_checkin_requires_a_valid_embedding(): void
+    {
+        $dept     = $this->makeDept();
+        $course   = $this->makeCourse($dept);
+        $lecturer = $this->makeLecturer();
+        $lecture  = $this->makeLecture($lecturer, $course);
+        $student  = $this->makeStudent();
+
+        Sanctum::actingAs($student, ['role:student']);
+
+        // Wrong-sized embedding → validation error.
+        $res = $this->postJson('/api/student/attend', [
+            'token'     => $lecture->token,
+            'embedding' => [1, 2, 3],
+            'device_id' => 'device-bad-embed',
+        ]);
+        $res->assertStatus(422);
+        $this->assertArrayHasKey('embedding', $res->json('errors'));
+    }
+
+    public function test_admin_face_register_stores_the_embedding(): void
+    {
+        Storage::fake('public');
+
+        $admin   = User::factory()->create(['role' => 'admin']);
+        $student = $this->makeStudent(['face_embedding' => null]);
+
+        Sanctum::actingAs($admin, ['role:admin']);
+
+        $res = $this->post('/api/admin/students/' . $student->id . '/face-register', [
+            'face_image'      => UploadedFile::fake()->image('face.jpg'),
+            'face_embedding'  => json_encode($this->embedding(1.0)),
+        ]);
+
+        $res->assertOk()->assertJsonPath('user.face_ready', true);
+        $this->assertNotNull($student->fresh()->face_embedding);
+        $this->assertCount(128, $student->fresh()->face_embedding);
+
+        // An invalid embedding is rejected.
+        $res2 = $this->post('/api/admin/students/' . $student->id . '/face-register', [
+            'face_image'     => UploadedFile::fake()->image('face2.jpg'),
+            'face_embedding' => json_encode([1, 2, 3]),
+        ]);
+        $res2->assertStatus(422);
     }
 
     public function test_gps_geofence_blocks_students_outside_the_radius(): void
@@ -508,6 +657,7 @@ class SmartAttendanceTest extends TestCase
         Sanctum::actingAs($near, ['role:student']);
         $this->postJson('/api/student/attend', [
             'token'     => $lecture->token,
+            'embedding' => $this->matchingScan(),
             'device_id' => 'device-near',
             'latitude'  => 6.4505000,
             'longitude' => 7.5005000,
@@ -518,6 +668,7 @@ class SmartAttendanceTest extends TestCase
         Sanctum::actingAs($far, ['role:student']);
         $res = $this->postJson('/api/student/attend', [
             'token'     => $lecture->token,
+            'embedding' => $this->matchingScan(),
             'device_id' => 'device-far',
             'latitude'  => 6.5244000,
             'longitude' => 3.3792000,
@@ -530,6 +681,7 @@ class SmartAttendanceTest extends TestCase
         Sanctum::actingAs($noloc, ['role:student']);
         $res = $this->postJson('/api/student/attend', [
             'token'     => $lecture->token,
+            'embedding' => $this->matchingScan(),
             'device_id' => 'device-noloc',
         ]);
         $res->assertStatus(422);
@@ -554,7 +706,7 @@ class SmartAttendanceTest extends TestCase
             'lecturer_id'  => $lecturer->id,
             'lecture_date' => $lecture->scheduled_date,
             'status'       => 'present',
-            'source'       => 'qr',
+            'source'       => 'face',
         ]);
 
         Sanctum::actingAs($lecturer, ['role:lecturer']);

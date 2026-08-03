@@ -34,6 +34,7 @@ class User extends Authenticatable
         'verified',
         'face_enrolled_at',
         'face_photo',
+        'face_embedding',
         'docs_count',
         'username', // admin only
     ];
@@ -50,8 +51,60 @@ class User extends Authenticatable
             'password' => 'hashed',
             'verified' => 'boolean',
             'face_enrolled_at' => 'datetime',
+            'face_embedding' => 'array',
             'docs_count' => 'integer',
         ];
+    }
+
+    /* ── Face-scan attendance helpers ── */
+
+    /**
+     * True when the student has an enrolled FaceNet embedding that can be used
+     * to verify a live face scan during attendance check-in.
+     */
+    public function hasFaceEnrolled(): bool
+    {
+        return is_array($this->face_embedding) && count($this->face_embedding) > 0;
+    }
+
+    /**
+     * Cosine similarity between the student's enrolled FaceNet embedding and a
+     * live scan embedding. Both are expected to be 128-dim unit vectors.
+     * Returns 0.0 when either side is unusable.
+     */
+    public function faceSimilarity(array $liveEmbedding): float
+    {
+        $enrolled = $this->face_embedding;
+
+        if (! is_array($enrolled) || count($enrolled) !== count($liveEmbedding) || count($liveEmbedding) === 0) {
+            return 0.0;
+        }
+
+        $dot = 0.0;
+        $a   = 0.0;
+        $b   = 0.0;
+        foreach ($enrolled as $i => $value) {
+            $dot += (float) $value * (float) $liveEmbedding[$i];
+            $a   += (float) $value ** 2;
+            $b   += (float) $liveEmbedding[$i] ** 2;
+        }
+
+        if ($a <= 0.0 || $b <= 0.0) {
+            return 0.0;
+        }
+
+        return $dot / (sqrt($a) * sqrt($b));
+    }
+
+    /**
+     * Verify a live scan embedding against the enrolled one, using the
+     * configured similarity threshold (config/attendance.php).
+     */
+    public function verifyFace(array $liveEmbedding, ?float $threshold = null): bool
+    {
+        $threshold = $threshold ?? (float) config('attendance.face_similarity_threshold', 0.55);
+
+        return $this->faceSimilarity($liveEmbedding) >= $threshold;
     }
 
     /* ── Relations ── */

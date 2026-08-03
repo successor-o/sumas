@@ -163,9 +163,13 @@ const API = {
     async markNotificationRead(id) {
       return API.put(`/student/notifications/${id}/read`);
     },
-    // QR smart attendance
-    async attend(token, deviceId) {
-      return API.post('/student/attend', { token, device_id: deviceId });
+    // Face-scan smart attendance
+    async attend(token, embedding, deviceId) {
+      return API.post('/student/attend', { token, embedding, device_id: deviceId });
+    },
+    // Face check-in straight from the dashboard (lecture id, no token exposed).
+    async faceCheckin(lectureId, payload) {
+      return API.post(`/student/lectures/${lectureId}/face-checkin`, payload);
     },
     async getAttendInfo(token) {
       return API.get(`/attend/${encodeURIComponent(token)}`, false);
@@ -223,9 +227,10 @@ const API = {
     async updateStatus(id, status) {
       return API.put(`/admin/students/${id}/status`, { status });
     },
-    async faceRegister(id, faceImage) {
+    async faceRegister(id, faceImage, embedding) {
       const fd = new FormData();
       fd.append('face_image', faceImage); // Blob/File from webcam capture
+      if (embedding) fd.append('face_embedding', JSON.stringify(embedding)); // 128-dim FaceNet descriptor
       return API._upload(`/admin/students/${id}/face-register`, fd);
     },
     async changePassword(data) {
