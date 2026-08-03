@@ -53,18 +53,33 @@
     .switch-row input:checked + .switch::after { transform: translateX(20px); }
     .form-hint { font-size: .72rem; color: var(--t-muted); margin-top: 4px; }
 
-    /* ── QR modal ── */
-    .qr-modal-box { max-width: 430px; text-align: center; }
-    .qr-lecture-title { font-size: 1rem; font-weight: 800; color: var(--t-primary); }
-    .qr-lecture-sub { font-size: .78rem; color: var(--t-muted); margin-top: 2px; }
-    .qr-code-wrap { margin: 18px auto 0; display: inline-block; padding: 14px; background: #fff; border: 1px solid var(--bdr-light); border-radius: var(--r-xl); box-shadow: var(--sh-md); }
-    .qr-code-wrap img, .qr-code-wrap canvas { display: block; }
-    .qr-scan-hint { margin-top: 12px; font-size: .72rem; color: var(--t-muted); line-height: 1.6; }
-    .qr-count { margin-top: 14px; font-size: .84rem; font-weight: 800; color: var(--success); }
-    .qr-link-row { display: flex; gap: var(--s2); margin-top: 14px; }
-    .qr-link-row .input { font-size: .7rem; font-family: var(--f-mono); }
-    .qr-code-meta { font-size: .72rem; color: var(--t-muted); margin-top: 6px; line-height: 1.6; }
-    .qr-code-hint { font-size: .74rem; color: var(--t-secondary); margin-top: 10px; background: var(--surf-2); border: 1px dashed var(--bdr); border-radius: var(--r-md); padding: 10px 12px; }
+    /* ── Scan Student modal ── */
+    .scan-modal-box { max-width: 460px; }
+    .scan-modal-box .modal-body { text-align: center; }
+    .scan-lecture-info { background: var(--surf-2); border: 1px solid var(--bdr-light); border-radius: var(--r-lg); padding: 12px 14px; margin-bottom: 14px; text-align: left; }
+    .scan-lecture-course { font-family: var(--f-mono); font-size: .66rem; font-weight: 700; letter-spacing: .6px; color: var(--brand); text-transform: uppercase; }
+    .scan-lecture-title { font-size: .95rem; font-weight: 800; color: var(--t-primary); margin-top: 3px; }
+    .scan-lecture-meta { font-size: .74rem; color: var(--t-muted); margin-top: 3px; line-height: 1.6; }
+    .scan-camera-wrap { position: relative; border-radius: var(--r-lg); overflow: hidden; background: #0f0f10; aspect-ratio: 4/3; }
+    .scan-camera-wrap video { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .scan-camera-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+      color: rgba(255,255,255,.85); font-size: .84rem; text-align: center; padding: 20px; line-height: 1.5; background: rgba(10,10,12,.55); }
+    .scan-camera-overlay[hidden] { display: none; }
+    .scan-frame { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); width: 58%; height: 58%; pointer-events: none; border-radius: 999px;
+      border: 3px solid rgba(212,160,32,.9); box-shadow: 0 0 0 2000px rgba(0,0,0,.35), 0 0 24px rgba(212,160,32,.45); }
+    .scan-frame.ok { border-color: var(--success); box-shadow: 0 0 0 2000px rgba(0,0,0,.25), 0 0 24px rgba(22,110,60,.55); }
+    .scan-student-result { border-radius: var(--r-lg); padding: 12px 14px; font-size: .84rem; font-weight: 600; line-height: 1.5; margin-top: 12px; display: flex; align-items: center; gap: 10px; }
+    .scan-student-result.success { background: var(--success-bg); color: var(--success); }
+    .scan-student-result.error { background: var(--error-bg); color: var(--error); }
+    .scan-student-result.warn { background: var(--g100); color: var(--g700); }
+    .scan-student-result.info { background: var(--b25); color: var(--brand); }
+    .scan-student-result .ssr-icon { font-size: 1.2rem; }
+    .scan-student-result .ssr-body { text-align: left; flex: 1; }
+    .scan-student-result .ssr-title { font-weight: 700; }
+    .scan-student-result .ssr-sub { font-size: .78rem; font-weight: 400; margin-top: 2px; }
+    .scan-hint { font-size: .72rem; color: var(--t-muted); margin-top: 12px; line-height: 1.6; }
+    .scan-actions { margin-top: 14px; display: flex; gap: var(--s3); flex-wrap: wrap; justify-content: center; }
+    .scan-actions .btn { min-width: 120px; }
   </style>
 </head>
 <body id="lecturer-dashboard">
@@ -310,12 +325,12 @@
           <span class="switch"></span>
           <span>Enable face scan check-in for this lecture</span>
         </label>
-        <p class="form-hint">When the lecture is active, students verify their identity with a face scan to mark attendance.</p>
+        <p class="form-hint">When the lecture is active, you can scan students' faces with your camera to mark their attendance during the lecture.</p>
       </div>
       <div class="form-group">
         <label class="form-label">Attendance Marks (optional)</label>
         <input type="number" id="lecture-attendance-score" class="input" min="0" max="999.99" step="0.5" placeholder="e.g. 2" inputmode="decimal"/>
-        <p class="form-hint">Marks each student earns for attending this lecture. Leave blank for no marks (e.g. 0.5, 1, 2).</p>
+        <p class="form-hint">Marks each student automatically earns when you scan their face. Leave blank for no marks (e.g. 0.5, 1, 2).</p>
       </div>
       <div class="form-group">
         <label class="form-label">GPS Check-in (optional)</label>
@@ -324,7 +339,7 @@
           <span class="switch"></span>
           <span>Require students to be near this venue</span>
         </label>
-        <p class="form-hint">When enabled, your current location is captured and students must be within the attendance radius. Requires HTTPS in production.</p>
+        <p class="form-hint">When enabled, students must be within the attendance radius of the lecture venue. Requires HTTPS in production.</p>
       </div>
     </div>
     <div class="modal-actions">
@@ -334,25 +349,25 @@
   </div>
 </div>
 
-<!-- FACE CHECK-IN LINK MODAL -->
-<div class="student-modal" id="qr-modal" style="display:none">
-  <div class="modal-box qr-modal-box">
+<!-- SCAN STUDENT MODAL (lecturer camera) -->
+<div class="student-modal" id="scan-modal" style="display:none">
+  <div class="modal-box scan-modal-box">
     <div class="modal-head">
-      <div class="modal-name">🤖 Face Check-In Link</div>
-      <button class="modal-close" id="close-qr-modal">✕</button>
+      <div class="modal-name">🤖 Scan Student Face</div>
+      <button class="modal-close" id="close-scan-modal">✕</button>
     </div>
     <div class="modal-body">
-      <div class="qr-lecture-title" id="qr-lecture-title">—</div>
-      <div class="qr-lecture-sub" id="qr-lecture-sub">—</div>
-      <div class="qr-code-wrap"><div id="qr-code"></div></div>
-      <div class="qr-scan-hint">Students scan this code with their phone camera to open the <strong>face check-in</strong> page — their identity is verified with a live face scan.</div>
-      <div class="qr-code-meta" id="qr-rotation-countdown"></div>
-      <div class="qr-count" id="qr-count">—</div>
-      <div class="qr-link-row">
-        <input type="text" id="qr-link" class="input" readonly/>
-        <button class="btn btn-secondary btn-md" id="qr-copy-btn">Copy</button>
-        <button class="btn btn-outline btn-md" id="qr-refresh-btn">↻ Refresh</button>
+      <div class="scan-lecture-info" id="scan-lecture-info"></div>
+      <div class="scan-camera-wrap">
+        <video id="scan-video" playsinline muted></video>
+        <div class="scan-camera-overlay" id="scan-camera-overlay">⏳ Starting camera…</div>
+        <div class="scan-frame" id="scan-frame" hidden></div>
       </div>
+      <div id="scan-result-container"></div>
+      <div class="scan-actions">
+        <button class="btn btn-primary btn-md" id="scan-another-btn" style="display:none">🔄 Scan Another Student</button>
+      </div>
+      <p class="scan-hint">Point the camera at the student's face and hold still. The system matches their face against enrolled students — attendance is recorded automatically.</p>
     </div>
   </div>
 </div>
@@ -390,7 +405,7 @@
   </div>
 </div>
 
-<script src="{{ asset('assets/js/vendor/qrcode.min.js') }}"></script>
+<script src="{{ asset('assets/js/vendor/face-api.min.js') }}"></script>
 <script src="{{ asset('assets/js/api.js') }}"></script>
 <script src="{{ asset('assets/js/app.js') }}"></script>
 <script>
@@ -587,15 +602,15 @@ if (document.getElementById('lecturer-dashboard')) {
         <td><span class="badge ${l.is_active ? 'badge-green' : 'badge-gray'}">${l.is_active ? 'Active' : 'Ended'}</span></td>
         <td>
           ${l.is_active
-            ? `<div style="display:flex;gap:var(--s2);flex-wrap:wrap">${l.attendance_enabled ? `<button class="btn btn-sm btn-outline" data-show-qr="${l.id}">📱 QR</button>` : ''}<button class="btn btn-sm btn-secondary" data-end-lecture="${l.id}">⏹ End</button></div>`
+            ? `<div style="display:flex;gap:var(--s2);flex-wrap:wrap">${l.attendance_enabled ? `<button class="btn btn-sm btn-primary" data-scan-student="${l.id}">🤖 Scan Student</button>` : ''}<button class="btn btn-sm btn-secondary" data-end-lecture="${l.id}">⏹ End</button></div>`
             : '<span style="font-size:.75rem;color:var(--t-light)">—</span>'}
         </td>
       </tr>`).join('');
 
-    tbody.querySelectorAll('[data-show-qr]').forEach(btn => {
+    tbody.querySelectorAll('[data-scan-student]').forEach(btn => {
       btn.addEventListener('click', () => {
-        const lecture = allLectures.find(l => l.id === parseInt(btn.dataset.showQr));
-        if (lecture) openQrModal(lecture);
+        const lecture = allLectures.find(l => l.id === parseInt(btn.dataset.scanStudent));
+        if (lecture) openScanModal(lecture);
       });
     });
 
@@ -760,91 +775,172 @@ if (document.getElementById('lecturer-dashboard')) {
     }
   });
 
-  /* ── Face check-in link modal (live: rotating QR link) ── */
-  const qrModal = document.getElementById('qr-modal');
-  let qrLectureId = null;
-  let qrCurrentToken = null;
-  let qrPollTimer = null;
-  let qrTickTimer = null;
-  let qrData = null;
+  /* ── Scan Student modal (lecturer camera) ── */
+  const scanModal = document.getElementById('scan-modal');
+  const scanVideo = document.getElementById('scan-video');
+  const FACE_MODEL_URL = '/assets/models';
+  let faceModelsReady = false;
+  let scanStream = null;
+  let scanRaf = null;
+  let scanLecture = null;
+  let scanLocked = false;
+  let faceStable = 0;
 
-  function stopQrPolling() {
-    if (qrPollTimer) { clearInterval(qrPollTimer); qrPollTimer = null; }
-    if (qrTickTimer) { clearInterval(qrTickTimer); qrTickTimer = null; }
+  async function ensureFaceModels() {
+    if (faceModelsReady) return true;
+    try {
+      await Promise.all([
+        faceapi.nets.tinyFaceDetector.loadFromUri(FACE_MODEL_URL),
+        faceapi.nets.faceLandmark68Net.loadFromUri(FACE_MODEL_URL),
+        faceapi.nets.faceRecognitionNet.loadFromUri(FACE_MODEL_URL),
+      ]);
+      faceModelsReady = true;
+      return true;
+    } catch (e) {
+      return false;
+    }
   }
 
-  function openQrModal(lecture) {
-    if (!lecture || !lecture.token) return;
-    qrLectureId = lecture.id;
-    qrCurrentToken = null;
-    qrData = null;
-    document.getElementById('qr-lecture-title').textContent = lecture.title;
-    document.getElementById('qr-lecture-sub').textContent = courseLabel(lecture.course_id);
-    document.getElementById('qr-code').innerHTML = '';
-    document.getElementById('qr-rotation-countdown').textContent = '';
-    document.getElementById('qr-link').value = '';
-    document.getElementById('qr-count').textContent = '⏳ Loading…';
-    qrModal.style.display = 'flex'; void qrModal.offsetWidth; qrModal.classList.add('open');
-    pollQrOnce(lecture.id);
-    qrPollTimer = setInterval(() => pollQrOnce(lecture.id), 4000);
-    qrTickTimer = setInterval(renderQrTicks, 1000);
+  function stopCamera() {
+    if (scanRaf) { cancelAnimationFrame(scanRaf); scanRaf = null; }
+    if (scanStream) { scanStream.getTracks().forEach(t => t.stop()); scanStream = null; }
+    const v = document.getElementById('scan-video');
+    if (v) v.srcObject = null;
   }
 
-  function closeQrModal() {
-    if (!qrModal) return;
-    stopQrPolling();
-    qrModal.classList.remove('open');
-    setTimeout(() => { qrModal.style.display = 'none'; }, 300);
+  function showOverlay(msg, ok) {
+    const o = document.getElementById('scan-camera-overlay');
+    if (o) { o.hidden = !msg; o.textContent = msg || ''; }
+    const f = document.getElementById('scan-frame');
+    if (f) { f.hidden = !msg; f.classList.toggle('ok', !!ok); }
   }
 
-  async function pollQrOnce(lectureId) {
-    const res = await API.lecturer.liveCode(lectureId);
-    if (!res.ok) {
-      if (res.status === 401 || res.status === 403) { SessionStore.clear(); window.location.href = '/lecturer/login'; return; }
+  function showScanResult(kind, title, sub) {
+    const container = document.getElementById('scan-result-container');
+    if (!container) return;
+    const icon = { success: '✅', error: '❌', warn: '⚠️', info: 'ℹ️' }[kind] || 'ℹ️';
+    container.innerHTML = '<div class="scan-student-result ' + kind + '">' +
+      '<span class="ssr-icon">' + icon + '</span>' +
+      '<div class="ssr-body"><div class="ssr-title">' + title + '</div>' +
+      (sub ? '<div class="ssr-sub">' + sub + '</div>' : '') + '</div></div>';
+    const btn = document.getElementById('scan-another-btn');
+    if (btn) btn.style.display = 'flex';
+  }
+
+  function clearScanResult() {
+    const container = document.getElementById('scan-result-container');
+    if (container) container.innerHTML = '';
+    const btn = document.getElementById('scan-another-btn');
+    if (btn) btn.style.display = 'none';
+  }
+
+  function openScanModal(lecture) {
+    if (!lecture) return;
+    scanLecture = lecture;
+    scanLocked = false;
+    faceStable = 0;
+    clearScanResult();
+    document.getElementById('scan-lecture-info').innerHTML =
+      '<div class="scan-lecture-course">' + escHtml(courseLabel(lecture.course_id)) + '</div>' +
+      '<div class="scan-lecture-title">' + escHtml(lecture.title) + '</div>' +
+      '<div class="scan-lecture-meta">📅 ' + new Date(lecture.scheduled_date).toLocaleString() + '</div>';
+    showOverlay('⏳ Preparing face AI…', true);
+    scanModal.style.display = 'flex'; void scanModal.offsetWidth; scanModal.classList.add('open');
+    startScanner();
+  }
+
+  function closeScanModal() {
+    stopCamera();
+    if (!scanModal) return;
+    scanModal.classList.remove('open');
+    setTimeout(() => { scanModal.style.display = 'none'; }, 300);
+  }
+
+  async function startScanner() {
+    if (!(await ensureFaceModels())) {
+      showOverlay('');
+      showScanResult('error', 'Face AI could not be loaded.', 'Check your internet connection and try again.');
       return;
     }
-    qrData = res.data;
-    if (res.data.token && res.data.token !== qrCurrentToken) {
-      qrCurrentToken = res.data.token;
-      const url = res.data.qr_url || (window.location.origin + '/attend/' + res.data.token);
-      document.getElementById('qr-link').value = url;
-      const host = document.getElementById('qr-code');
-      host.innerHTML = '';
-      if (typeof QRCode !== 'undefined') {
-        new QRCode(host, { text: url, width: 210, height: 210, colorDark: '#1c1917', colorLight: '#ffffff', correctLevel: QRCode.CorrectLevel.M });
-      } else {
-        host.innerHTML = '<p style="font-size:.8rem;color:var(--t-muted)">QR library unavailable.</p>';
-      }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      showOverlay('');
+      showScanResult('error', 'Camera unavailable', 'Camera access is not supported on this device.');
+      return;
     }
-    const countEl = document.getElementById('qr-count');
-    if (countEl && res.data.attendance_count != null) {
-      countEl.textContent = `${res.data.attendance_count} student${res.data.attendance_count !== 1 ? 's' : ''} marked attendance`;
-    }
-    renderQrTicks();
-  }
-
-  function renderQrTicks() {
-    if (!qrData) return;
-    const now = Date.now();
-    const rEl = document.getElementById('qr-rotation-countdown');
-    if (rEl && qrData.rotation_expires_at) {
-      const s = Math.max(0, Math.round((new Date(qrData.rotation_expires_at).getTime() - now) / 1000));
-      rEl.textContent = `QR link refreshes in ${s}s`;
+    try {
+      scanStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
+        audio: false,
+      });
+      scanVideo.srcObject = scanStream;
+      await scanVideo.play();
+      showOverlay('Point camera at the student — scanning…', true);
+      scanRaf = requestAnimationFrame(detectLoop);
+    } catch (err) {
+      showOverlay('');
+      showScanResult('error', 'Camera permission denied', 'Allow camera access in your browser and try again.');
     }
   }
 
-  document.getElementById('close-qr-modal')?.addEventListener('click', closeQrModal);
-  qrModal?.addEventListener('click', e => { if (e.target === qrModal) closeQrModal(); });
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeQrModal(); closeManualModal(); } });
-  document.getElementById('qr-copy-btn')?.addEventListener('click', () => {
-    const input = document.getElementById('qr-link');
-    if (!input) return;
-    input.select(); input.setSelectionRange(0, 99999);
-    try { navigator.clipboard.writeText(input.value); } catch {}
-    showToast('success', 'Copied', 'Attendance link copied to clipboard.');
-  });
-  document.getElementById('qr-refresh-btn')?.addEventListener('click', () => {
-    if (qrLectureId) pollQrOnce(qrLectureId);
+  function detectLoop() {
+    if (!scanStream || scanLocked) return;
+    if (!scanVideo.videoWidth) { scanRaf = requestAnimationFrame(detectLoop); return; }
+    faceapi.detectSingleFace(scanVideo, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 }))
+      .withFaceLandmarks()
+      .withFaceDescriptor()
+      .then(result => {
+        if (!result) { faceStable = 0; scanRaf = requestAnimationFrame(detectLoop); return; }
+        faceStable++;
+        if (faceStable >= 2) { markScan(Array.from(result.descriptor)); return; }
+        scanRaf = requestAnimationFrame(detectLoop);
+      })
+      .catch(() => { scanRaf = requestAnimationFrame(detectLoop); });
+  }
+
+  async function markScan(embedding) {
+    if (scanLocked) return;
+    scanLocked = true;
+    stopCamera();
+    showOverlay('🤖 Identifying student…', true);
+    const res = await API.lecturer.scanStudent(scanLecture.id, { embedding });
+    if (res.ok) {
+      showOverlay('');
+      showScanResult('success', '✅ Attendance Marked!',
+        escHtml(res.data.student?.name || 'Student') + ' — ' + escHtml(res.data.student?.matric || '') +
+        (res.data.attendance?.attendance_score != null ? ' · 🎯 +' + res.data.attendance.attendance_score + ' marks' : '') +
+        ' <br/><span style="font-size:.72rem;opacity:.8">Match: ' + (res.data.match_score * 100).toFixed(1) + '%</span>');
+      // Refresh attendance count if available
+      loadLectures();
+      return;
+    }
+    if (res.status === 401) {
+      SessionStore.clear();
+      window.location.href = '/lecturer/login';
+      return;
+    }
+    scanLocked = false;
+    showOverlay('');
+    const msg = res.data.message || 'Could not identify student.';
+    const studentName = res.data.student?.name;
+    if (studentName) {
+      showScanResult('warn', '⚠️ ' + escHtml(msg), 'Student ' + escHtml(studentName) + ' is already marked.');
+    } else {
+      showScanResult('error', '❌ ' + escHtml(msg), 'Ask the student to face the camera and try again.');
+      const btn = document.getElementById('scan-another-btn');
+      if (btn) { btn.style.display = 'flex'; btn.textContent = '🤖 Try Again'; }
+    }
+  }
+
+  document.getElementById('close-scan-modal')?.addEventListener('click', closeScanModal);
+  scanModal?.addEventListener('click', e => { if (e.target === scanModal) closeScanModal(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeScanModal(); closeManualModal(); } });
+  document.getElementById('scan-another-btn')?.addEventListener('click', () => {
+    if (!scanLecture) return;
+    clearScanResult();
+    scanLocked = false;
+    faceStable = 0;
+    showOverlay('⏳ Starting camera…', true);
+    startScanner();
   });
 
   /* ── Browser geolocation helper (used by GPS lecture creation) ── */

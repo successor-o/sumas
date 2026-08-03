@@ -34,40 +34,6 @@
 .lecture-card-foot.attended{color:var(--success)}
 .lecture-card-foot.live{color:var(--brand)}
 
-/* ── Live lecture cards: clickable to scan ── */
-.lecture-card.scannable{cursor:pointer}
-.lecture-card.scannable:hover{box-shadow:0 10px 30px rgba(107,51,24,.16);transform:translateY(-3px)}
-.lecture-card.scannable .lecture-card-title{color:var(--brand)}
-.lc-scan-btn{display:inline-flex;align-items:center;gap:6px;margin-top:var(--s3);width:100%;justify-content:center;
-  height:38px;border-radius:10px;border:1.5px solid var(--brand);background:var(--brand-pale);
-  color:var(--brand);font-family:var(--f-ui);font-size:.8rem;font-weight:700;cursor:pointer;
-  transition:all var(--dur-fast) var(--ease)}
-.lc-scan-btn:hover{background:var(--brand);color:#fff;box-shadow:var(--sh-brand)}
-.att-score{margin-top:2px}
-
-/* ── Face scan modal ── */
-.scan-modal-box{max-width:460px}
-.scan-lecture{background:var(--surf-2);border:1px solid var(--bdr-light);border-radius:var(--r-lg);padding:12px 14px;margin-bottom:14px}
-.scan-lecture-course{font-family:var(--f-mono);font-size:.66rem;font-weight:700;letter-spacing:.6px;color:var(--brand);text-transform:uppercase}
-.scan-lecture-title{font-size:.95rem;font-weight:800;color:var(--t-primary);margin-top:3px}
-.scan-lecture-meta{font-size:.74rem;color:var(--t-muted);margin-top:3px;line-height:1.6}
-.scan-camera-wrap{position:relative;border-radius:var(--r-lg);overflow:hidden;background:#0f0f10;aspect-ratio:4/3}
-.scan-camera-wrap video{width:100%;height:100%;object-fit:cover;display:block}
-.scan-camera-overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;
-  color:rgba(255,255,255,.85);font-size:.84rem;text-align:center;padding:20px;line-height:1.5;background:rgba(10,10,12,.55)}
-.scan-camera-overlay[hidden]{display:none}
-.face-frame{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:58%;height:58%;pointer-events:none;border-radius:999px;
-  border:3px solid rgba(212,160,32,.9);box-shadow:0 0 0 2000px rgba(0,0,0,.35),0 0 24px rgba(212,160,32,.45)}
-.face-frame.ok{border-color:var(--success);box-shadow:0 0 0 2000px rgba(0,0,0,.25),0 0 24px rgba(22,110,60,.55)}
-.scan-status{margin-top:14px}
-.scan-actions{margin-top:14px;display:flex;gap:var(--s3);flex-wrap:wrap}
-.scan-actions .btn{flex:1;min-width:150px}
-.scan-hint{font-size:.72rem;color:var(--t-muted);margin-top:12px;line-height:1.6}
-.scan-err{border-radius:var(--r-lg);padding:12px 14px;font-size:.84rem;font-weight:600;line-height:1.5;margin-top:12px}
-.scan-err.error{background:var(--error-bg);color:var(--error)}
-.scan-err.success{background:var(--success-bg);color:var(--success)}
-.scan-err.warn{background:var(--g100);color:var(--g700)}
-
 /* ── Attendance cards ── */
 .att-card{display:flex;align-items:flex-start;gap:var(--s3);background:var(--white);border:1px solid var(--bdr-light);border-radius:var(--r-lg);padding:var(--s4);margin-bottom:var(--s3);transition:all var(--dur-fast) var(--ease)}
 .att-card:hover{border-color:var(--b300);box-shadow:var(--sh-sm)}
@@ -569,29 +535,6 @@
 </div><!-- /dash-root -->
 
 
-
-<!-- FACE SCAN MODAL (camera check-in) -->
-<div class="student-modal" id="scan-modal" style="display:none">
-  <div class="modal-box scan-modal-box">
-    <div class="modal-head">
-      <div class="modal-name">🤖 Face Scan Check-In</div>
-      <button class="modal-close" id="close-scan-modal">✕</button>
-    </div>
-    <div class="modal-body">
-      <div class="scan-lecture" id="scan-lecture-info"></div>
-      <div class="scan-camera-wrap">
-        <video id="scan-video" playsinline muted></video>
-        <div class="scan-camera-overlay" id="scan-camera-overlay">⏳ Starting camera…</div>
-        <div class="face-frame" id="scan-frame" hidden></div>
-      </div>
-      <div class="scan-err" id="scan-status" style="display:none"></div>
-      <div class="scan-actions">
-        <button class="btn btn-primary btn-md" id="scan-retry-btn" style="display:none">🤖 Scan Again</button>
-      </div>
-      <p class="scan-hint">Look at the camera and hold still. Your identity is verified against the face enrolled at the ICT office — check-in happens automatically.</p>
-    </div>
-  </div>
-</div>
 
 <script src="{{ asset('assets/js/vendor/face-api.min.js') }}"></script>
 <script src="{{ asset('assets/js/api.js') }}"></script>

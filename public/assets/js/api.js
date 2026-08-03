@@ -163,17 +163,9 @@ const API = {
     async markNotificationRead(id) {
       return API.put(`/student/notifications/${id}/read`);
     },
-    // Face-scan smart attendance
-    async attend(token, embedding, deviceId) {
-      return API.post('/student/attend', { token, embedding, device_id: deviceId });
-    },
-    // Face check-in straight from the dashboard (lecture id, no token exposed).
-    async faceCheckin(lectureId, payload) {
-      return API.post(`/student/lectures/${lectureId}/face-checkin`, payload);
-    },
-    async getAttendInfo(token) {
-      return API.get(`/attend/${encodeURIComponent(token)}`, false);
-    },
+    // Face-scan smart attendance (no longer used — lecturer scans the student)
+    // These endpoints have been removed. Attendance is now driven by the
+    // lecturer who scans students during lecture via the lecturer dashboard.
   },
 
   /* ══ LECTURER ENDPOINTS ══ */
@@ -209,6 +201,9 @@ const API = {
     },
     async liveCode(id) {
       return API.get(`/lecturer/lectures/${id}/live`);
+    },
+    async scanStudent(lectureId, payload) {
+      return API.post(`/lecturer/lectures/${lectureId}/scan-student`, payload);
     },
   },
 

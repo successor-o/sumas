@@ -160,12 +160,10 @@ class LecturerController extends Controller
     }
 
     /**
-     * Live check-in link for the QR modal (polled by the frontend).
+     * Live lecture info for the lecturer dashboard.
      * GET /api/lecturer/lectures/{id}/live
      *
-     * Lazily rotates the token when its interval has elapsed, and returns the
-     * current QR url and rotation countdown. The QR is now just a link to the
-     * face-scan check-in page — identity is verified by face, not by the code.
+     * Returns the current attendance count for the lecture.
      */
     public function liveCode(Request $request, int $id): JsonResponse
     {
@@ -178,19 +176,112 @@ class LecturerController extends Controller
             return response()->json(['message' => 'Lecture not found or not yours.'], 404);
         }
 
-        $lecture->ensureFreshToken();
-
         return response()->json([
-            'token' => $lecture->token,
-            'previous_token' => $lecture->previous_token,
-            'qr_url' => url('/attend/' . $lecture->token),
-            'rotation_expires_at' => $lecture->token_rotated_at
-                ->addSeconds((int) config('attendance.rotation_seconds', 60))
-                ->toIso8601String(),
-            'rotation_seconds' => (int) config('attendance.rotation_seconds', 60),
-            'gps_required' => $lecture->gps_required,
             'attendance_count' => Attendance::where('lecture_id', $lecture->id)->count(),
         ]);
+    }
+
+    /**
+     * Mark a student's attendance by scanning their face.
+     * POST /api/lecturer/lectures/{id}/scan-student  { embedding }
+     *
+     * The LECTURER points their device camera at a student during the live
+     * lecture; the browser computes a 128-dim FaceNet embedding of the student's
+     * face and sends it here. It is compared against the enrolled embeddings of
+     * every face-enrolled student in the lecture audience; the best match above
+     * the similarity threshold gets marked present.
+     *
+     * Guard rails:
+     *  - The lecture must belong to the lecturer, be active and have smart
+     *    attendance enabled.
+     *  - Only approved, face-enrolled students in the lecture audience
+     *    (enrolled in the course or in the course's department) can be matched
+     *    — a student outside the audience can never be marked this way.
+     *  - A student can only be marked once per lecture.
+     *  - The lecturer's device is NOT locked to a single scan — it records
+     *    every student the lecturer scans.
+     */
+    public function scanStudent(Request $request, int $id): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'embedding' => ['required', 'array', 'size:128'],
+            'embedding.*' => ['numeric'],
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['message' => 'Validation failed.', 'errors' => $validator->errors()], 422);
+        }
+
+        $lecturer = $request->user();
+        $lecture = Lecture::where('id', $id)
+            ->where('lecturer_id', $lecturer->id)
+            ->first();
+
+        if (! $lecture) {
+            return response()->json(['message' => 'Lecture not found or not yours.'], 404);
+        }
+
+        if (! $lecture->is_active) {
+            return response()->json(['message' => 'This lecture has ended. Attendance is closed.'], 422);
+        }
+
+        if (! $lecture->attendance_enabled) {
+            return response()->json(['message' => 'Face scan check-in is not enabled for this lecture.'], 422);
+        }
+
+        // Only face-enrolled students in the lecture audience can be matched.
+        $audience = $this->lectureStudents($lecture)
+            ->filter(fn (User $s) => $s->hasFaceEnrolled())
+            ->values();
+
+        if ($audience->isEmpty()) {
+            return response()->json(['message' => 'No students with an enrolled face are registered for this lecture.'], 422);
+        }
+
+        $embedding = array_values(array_map('floatval', $request->input('embedding')));
+        $threshold = (float) config('attendance.face_similarity_threshold', 0.55);
+
+        // Find the best-matching enrolled face in the audience.
+        $best = null;
+        $bestScore = 0.0;
+        foreach ($audience as $student) {
+            $score = $student->faceSimilarity($embedding);
+            if ($score > $bestScore) {
+                $bestScore = $score;
+                $best = $student;
+            }
+        }
+
+        if (! $best || $bestScore < $threshold) {
+            return response()->json(['message' => 'Face not recognized. Ask the student to face the camera and try again.'], 422);
+        }
+
+        // One scan per student.
+        if (Attendance::where('lecture_id', $lecture->id)
+            ->where('student_id', $best->id)
+            ->exists()) {
+            return response()->json([
+                'message' => $best->name . ' has already been marked for this lecture.',
+                'student' => $this->formatStudent($best),
+            ], 422);
+        }
+
+        $attendance = Attendance::create([
+            'student_id'   => $best->id,
+            'lecture_id'   => $lecture->id,
+            'course_id'    => $lecture->course_id,
+            'lecturer_id'  => $lecturer->id,
+            'lecture_date' => $lecture->scheduled_date,
+            'status'       => 'present',
+            'source'       => 'lecturer',
+        ]);
+
+        return response()->json([
+            'message'      => 'Attendance marked for ' . $best->name . '.',
+            'student'      => $this->formatStudent($best),
+            'attendance'   => $this->formatAttendance($attendance),
+            'match_score'  => round($bestScore, 4),
+        ], 201);
     }
 
     /**
@@ -340,7 +431,7 @@ class LecturerController extends Controller
     /**
      * The audience for a lecture: approved students enrolled in the course,
      * plus approved students in the course's department (the portal shows
-     * department-wide lectures, so those students can scan the QR too).
+     * department-wide lectures, so those students can be scanned too).
      */
     private function lectureStudents(Lecture $lecture): Collection
     {
@@ -413,8 +504,6 @@ class LecturerController extends Controller
             'course_id' => $l->course_id,
             'title' => $l->title,
             'content' => $l->content,
-            // token is lecturer-only — the student-facing payload never includes it
-            'token' => $l->token,
             'scheduled_date' => $l->scheduled_date,
             'ended_at' => $l->ended_at,
             'is_active' => $l->is_active,

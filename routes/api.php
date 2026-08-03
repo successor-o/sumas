@@ -28,9 +28,6 @@ Route::prefix('auth')->group(function () {
 // Public status check (matric contains slashes, so it is passed as a query param)
 Route::get('/student/status', [StudentController::class, 'checkStatus']);
 
-// Public lecture info for the QR check-in page (safe subset — never the token)
-Route::get('/attend/{token}', [StudentController::class, 'lectureInfo']);
-
 // Public departments list
 Route::get('/departments', function () {
     return response()->json([
@@ -69,8 +66,6 @@ Route::middleware(['auth:sanctum', 'role:student'])->group(function () {
     Route::get('/student/courses',     [StudentController::class, 'courses']);
     Route::get('/student/attendance',  [StudentController::class, 'attendance']);
     Route::get('/student/lectures',    [StudentController::class, 'lectures']);
-    Route::post('/student/attend',     [StudentController::class, 'scanAttendance']);
-    Route::post('/student/lectures/{id}/face-checkin', [StudentController::class, 'faceCheckin']);
     Route::get('/student/notifications', [StudentController::class, 'notifications']);
     Route::put('/student/notifications/{id}/read', [StudentController::class, 'markNotificationRead']);
 });
@@ -145,6 +140,7 @@ Route::middleware(['auth:sanctum', 'role:lecturer'])->prefix('lecturer')->group(
     Route::get('/lectures',     [LecturerController::class, 'lectures']);
     Route::get('/lectures/{id}/live', [LecturerController::class, 'liveCode']);
     Route::post('/lectures/{id}/end', [LecturerController::class, 'endLecture']);
+    Route::post('/lectures/{id}/scan-student', [LecturerController::class, 'scanStudent']);
     Route::post('/attendance',  [LecturerController::class, 'recordAttendance']);
     Route::get('/attendance/{lectureId}', [LecturerController::class, 'getAttendance']);
 });
