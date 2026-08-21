@@ -375,7 +375,15 @@ class AdminController extends Controller
             return response()->json(['message' => 'Validation failed.', 'errors' => $validator->errors()], 422);
         }
 
-        $course = Course::create($validator->validated());
+        $data = $validator->validated();
+
+        // Populate the legacy `department` string column from the department_id
+        if (!empty($data['department_id'])) {
+            $dept = Department::find($data['department_id']);
+            $data['department'] = $dept?->name ?? '';
+        }
+
+        $course = Course::create($data);
 
         return response()->json([
             'message' => 'Course created successfully.',
@@ -404,7 +412,15 @@ class AdminController extends Controller
         }
 
         $course = Course::findOrFail($id);
-        $course->update($validator->validated());
+        $data = $validator->validated();
+
+        // Keep the legacy `department` string column in sync with department_id
+        if (!empty($data['department_id'])) {
+            $dept = Department::find($data['department_id']);
+            $data['department'] = $dept?->name ?? '';
+        }
+
+        $course->update($data);
 
         return response()->json([
             'message' => 'Course updated successfully.',
