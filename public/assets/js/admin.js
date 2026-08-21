@@ -164,8 +164,8 @@ if (document.getElementById('admin-dashboard')) {
 
   async function loadFacultiesAndDepartments() {
     const [facRes, deptRes] = await Promise.all([
-      API.get('/api/faculties'),
-      API.get('/api/departments')
+      API.get('/faculties'),
+      API.get('/departments')
     ]);
     if (facRes.ok) allFaculties = facRes.data.faculties || [];
     if (deptRes.ok) allDepartments = deptRes.data.departments || [];
@@ -807,7 +807,7 @@ if (document.getElementById('admin-dashboard')) {
   async function loadDepartments() {
     const [deptRes, facRes] = await Promise.all([
       API.admin.departments(),
-      API.get('/api/faculties')
+      API.get('/faculties')
     ]);
     if (deptRes.ok) {
       allDepartments = deptRes.data.departments;
@@ -883,6 +883,11 @@ if (document.getElementById('admin-dashboard')) {
       option.textContent = dept.name;
       select.appendChild(option);
     });
+  }
+
+  async function ensureFacultiesAndDepartmentsLoaded() {
+    if (allFaculties.length && allDepartments.length) return;
+    await loadDepartments();
   }
 
   async function loadCourses() {
@@ -1061,9 +1066,11 @@ if (document.getElementById('admin-dashboard')) {
     `).join('');
   }
 
-  window.editLecturer = function(id) {
+  window.editLecturer = async function(id) {
     const lecturer = allLecturers.find(l => l.id === id);
     if (!lecturer) return;
+    await ensureFacultiesAndDepartmentsLoaded();
+    populateFacultySelects();
     document.getElementById('lecturer-id').value = lecturer.id;
     document.getElementById('lecturer-name').value = lecturer.name;
     document.getElementById('lecturer-email').value = lecturer.email;
@@ -1089,16 +1096,20 @@ if (document.getElementById('admin-dashboard')) {
     }
   };
 
-  document.getElementById('create-lecturer-btn')?.addEventListener('click', () => {
+  document.getElementById('create-lecturer-btn')?.addEventListener('click', async () => {
     document.getElementById('lecturer-id').value = '';
     document.getElementById('lecturer-name').value = '';
     document.getElementById('lecturer-email').value = '';
     document.getElementById('lecturer-password').value = '';
     document.getElementById('lecturer-phone').value = '';
+    document.getElementById('lecturer-faculty').value = '';
     document.getElementById('lecturer-dept').value = '';
     document.getElementById('lecturer-bio').value = '';
     document.getElementById('lecturer-active').value = 'true';
     document.getElementById('lecturer-modal-title').textContent = 'Create Lecturer';
+    await ensureFacultiesAndDepartmentsLoaded();
+    populateFacultySelects();
+    populateDepartmentSelects();
     openAdminModal('lecturer-modal');
   });
 

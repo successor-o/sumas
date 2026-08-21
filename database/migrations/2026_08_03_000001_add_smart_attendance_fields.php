@@ -38,11 +38,14 @@ return new class extends Migration
     public function down(): void
     {
         Schema::table('attendances', function (Blueprint $table) {
+            $table->dropIndex(['lecture_id', 'student_id']);
+            $table->dropIndex(['lecture_id', 'device_id']);
             $table->dropConstrainedForeignId('lecture_id');
             $table->dropColumn(['device_id', 'source']);
         });
 
         Schema::table('lectures', function (Blueprint $table) {
+            $table->dropUnique(['token']);
             $table->dropColumn(['token', 'attendance_enabled']);
         });
     }
