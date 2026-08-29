@@ -340,6 +340,30 @@ class SmartAttendanceTest extends TestCase
         $this->assertDatabaseMissing('attendances', ['student_id' => $student->id, 'lecture_id' => $lecture->id]);
     }
 
+    public function test_different_student_cannot_be_matched(): void
+    {
+        $dept     = $this->makeDept();
+        $course   = $this->makeCourse($dept);
+        $lecturer = $this->makeLecturer();
+        $lecturer->courses()->attach($course->id);
+        $lecture  = $this->makeLecture($lecturer, $course);
+        // Student1 is enrolled with seed 1.0
+        $student1 = $this->makeStudent();
+        // Student2 is enrolled with seed 2.0
+        $student2 = $this->makeStudent(['face_embedding' => $this->embedding(2.0)]);
+
+        Sanctum::actingAs($lecturer, ['role:lecturer']);
+
+        // Scan with student2's face — must NOT match student1
+        $res = $this->postJson('/api/lecturer/lectures/' . $lecture->id . '/scan-student', [
+            'embedding' => $this->embedding(2.0),
+        ]);
+
+        $res->assertStatus(201);
+        $this->assertEquals($student2->id, $res->json('student.id'));
+        $this->assertDatabaseMissing('attendances', ['student_id' => $student1->id, 'lecture_id' => $lecture->id]);
+    }
+
     public function test_student_without_enrolled_face_cannot_be_scanned(): void
     {
         $dept     = $this->makeDept();

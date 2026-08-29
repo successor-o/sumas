@@ -21,6 +21,6 @@ return [
     | Same-person FaceNet scores usually sit well above 0.7; 0.55 keeps a little
     | headroom for webcam/lighting differences while still rejecting impostors.
     */
-    'face_similarity_threshold' => (float) env('ATTENDANCE_FACE_SIMILARITY_THRESHOLD', 0.55),
+    'face_similarity_threshold' => (float) env('ATTENDANCE_FACE_SIMILARITY_THRESHOLD', 0.70),
 
 ];
