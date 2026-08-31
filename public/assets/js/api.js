@@ -205,6 +205,9 @@ const API = {
     async scanStudent(lectureId, payload) {
       return API.post(`/lecturer/lectures/${lectureId}/scan-student`, payload);
     },
+    async confirmScanStudent(lectureId, studentId) {
+      return API.post(`/lecturer/lectures/${lectureId}/scan-student`, { student_id: studentId, confirm: true });
+    },
   },
 
   /* ══ ADMIN ENDPOINTS ══ */

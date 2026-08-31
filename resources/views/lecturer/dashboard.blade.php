@@ -80,6 +80,16 @@
     .scan-hint { font-size: .72rem; color: var(--t-muted); margin-top: 12px; line-height: 1.6; }
     .scan-actions { margin-top: 14px; display: flex; gap: var(--s3); flex-wrap: wrap; justify-content: center; }
     .scan-actions .btn { min-width: 120px; }
+    /* Confirm dialog */
+    .scan-confirm { margin-top: 14px; padding: 16px; background: var(--surf-2); border: 2px solid var(--brand); border-radius: var(--r-lg); text-align: center; }
+    .scan-confirm-name { font-size: 1.15rem; font-weight: 800; color: var(--t-primary); margin: 8px 0 4px; }
+    .scan-confirm-matric { font-size: .82rem; color: var(--t-muted); margin-bottom: 4px; }
+    .scan-confirm-score { font-size: .76rem; color: var(--brand); font-weight: 600; margin-bottom: 14px; }
+    .scan-confirm-actions { display: flex; gap: var(--s3); justify-content: center; }
+    .scan-confirm-actions .btn-confirm { background: var(--success); color: #fff; border: none; min-width: 140px; }
+    .scan-confirm-actions .btn-confirm:hover { filter: brightness(1.1); }
+    .scan-confirm-actions .btn-cancel { background: var(--error-bg); color: var(--error); border: 1.5px solid var(--error); min-width: 140px; }
+    .scan-confirm-actions .btn-cancel:hover { background: var(--error); color: #fff; }
   </style>
 </head>
 <body id="lecturer-dashboard">
@@ -367,7 +377,7 @@
       <div class="scan-actions">
         <button class="btn btn-primary btn-md" id="scan-another-btn" style="display:none">🔄 Scan Another Student</button>
       </div>
-      <p class="scan-hint">Point the camera at the student's face and hold still. The system matches their face against enrolled students — attendance is recorded automatically.</p>
+      <p class="scan-hint">Point the camera at the student's face and hold still. The system will identify the student — you confirm before marking attendance.</p>
     </div>
   </div>
 </div>
@@ -827,6 +837,35 @@ if (document.getElementById('lecturer-dashboard')) {
     if (btn) btn.style.display = 'flex';
   }
 
+  function showConfirmDialog(student, matchScore, alreadyMarked) {
+    const container = document.getElementById('scan-result-container');
+    if (!container) return;
+    const scorePct = (matchScore * 100).toFixed(1);
+    const headerText = alreadyMarked
+      ? '⚠️ Already Marked'
+      : 'Is this the correct student?';
+    container.innerHTML = '<div class="scan-confirm">' +
+      '<div style="font-weight:700;font-size:.88rem;color:var(--t-primary)">' + headerText + '</div>' +
+      '<div class="scan-confirm-name">' + escHtml(student.name) + '</div>' +
+      '<div class="scan-confirm-matric">' + escHtml(student.matric || '') + '</div>' +
+      '<div class="scan-confirm-score">Face match: ' + scorePct + '%</div>' +
+      (alreadyMarked
+        ? '<div class="scan-confirm-actions">'
+          + '<button class="btn btn-md btn-cancel" id="confirm-cancel-btn">🔄 Scan Another</button>'
+          + '</div>'
+        : '<div class="scan-confirm-actions">'
+          + '<button class="btn btn-md btn-confirm" id="confirm-yes-btn">✅ Confirm Attendance</button>'
+          + '<button class="btn btn-md btn-cancel" id="confirm-cancel-btn">❌ Cancel / Rescan</button>'
+          + '</div>')
+      + '</div>';
+    // Hide the generic "Scan Another" button while confirm is visible
+    const scanBtn = document.getElementById('scan-another-btn');
+    if (scanBtn) scanBtn.style.display = 'none';
+    // Wire buttons
+    document.getElementById('confirm-yes-btn')?.addEventListener('click', () => doConfirmAttendance(student.id));
+    document.getElementById('confirm-cancel-btn')?.addEventListener('click', resumeScan);
+  }
+
   function clearScanResult() {
     const container = document.getElementById('scan-result-container');
     if (container) container.innerHTML = '';
@@ -903,32 +942,63 @@ if (document.getElementById('lecturer-dashboard')) {
     stopCamera();
     showOverlay('🤖 Identifying student…', true);
     const res = await API.lecturer.scanStudent(scanLecture.id, { embedding });
-    if (res.ok) {
-      showOverlay('');
-      showScanResult('success', '✅ Attendance Marked!',
-        escHtml(res.data.student?.name || 'Student') + ' — ' + escHtml(res.data.student?.matric || '') +
-        (res.data.attendance?.attendance_score != null ? ' · 🎯 +' + res.data.attendance.attendance_score + ' marks' : '') +
-        ' <br/><span style="font-size:.72rem;opacity:.8">Match: ' + (res.data.match_score * 100).toFixed(1) + '%</span>');
-      // Refresh attendance count if available
-      loadLectures();
-      return;
-    }
+    showOverlay('');
     if (res.status === 401) {
       SessionStore.clear();
       window.location.href = '/lecturer/login';
       return;
     }
+    if (res.ok && res.data.student) {
+      // Step 1 succeeded — show confirmation dialog
+      scanLocked = false; // allow confirm/cancel actions
+      showConfirmDialog(res.data.student, res.data.match_score || 0, !!res.data.already_marked);
+      return;
+    }
+    // No match or error
     scanLocked = false;
-    showOverlay('');
     const msg = res.data.message || 'Could not identify student.';
+    showScanResult('error', '❌ ' + escHtml(msg), 'Ask the student to face the camera and try again.');
+    const btn = document.getElementById('scan-another-btn');
+    if (btn) { btn.style.display = 'flex'; btn.textContent = '🤖 Try Again'; }
+  }
+
+  async function doConfirmAttendance(studentId) {
+    scanLocked = true;
+    clearScanResult();
+    showOverlay('✅ Recording attendance…', true);
+    const res = await API.lecturer.confirmScanStudent(scanLecture.id, studentId);
+    showOverlay('');
+    if (res.status === 401) {
+      SessionStore.clear();
+      window.location.href = '/lecturer/login';
+      return;
+    }
+    if (res.ok) {
+      showScanResult('success', '✅ Attendance Marked!',
+        escHtml(res.data.student?.name || 'Student') + ' — ' + escHtml(res.data.student?.matric || '') +
+        (res.data.attendance?.attendance_score != null ? ' · 🎯 +' + res.data.attendance.attendance_score + ' marks' : ''));
+      loadLectures();
+      return;
+    }
+    // Already marked or error
+    scanLocked = false;
+    const msg = res.data.message || 'Could not record attendance.';
     const studentName = res.data.student?.name;
     if (studentName) {
       showScanResult('warn', '⚠️ ' + escHtml(msg), 'Student ' + escHtml(studentName) + ' is already marked.');
     } else {
-      showScanResult('error', '❌ ' + escHtml(msg), 'Ask the student to face the camera and try again.');
-      const btn = document.getElementById('scan-another-btn');
-      if (btn) { btn.style.display = 'flex'; btn.textContent = '🤖 Try Again'; }
+      showScanResult('error', '❌ ' + escHtml(msg), '');
     }
+    const btn = document.getElementById('scan-another-btn');
+    if (btn) { btn.style.display = 'flex'; btn.textContent = '🔄 Scan Another Student'; }
+  }
+
+  function resumeScan() {
+    clearScanResult();
+    scanLocked = false;
+    faceStable = 0;
+    showOverlay('⏳ Starting camera…', true);
+    startScanner();
   }
 
   document.getElementById('close-scan-modal')?.addEventListener('click', closeScanModal);
@@ -936,11 +1006,7 @@ if (document.getElementById('lecturer-dashboard')) {
   document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeScanModal(); closeManualModal(); } });
   document.getElementById('scan-another-btn')?.addEventListener('click', () => {
     if (!scanLecture) return;
-    clearScanResult();
-    scanLocked = false;
-    faceStable = 0;
-    showOverlay('⏳ Starting camera…', true);
-    startScanner();
+    resumeScan();
   });
 
   /* ── Browser geolocation helper (used by GPS lecture creation) ── */

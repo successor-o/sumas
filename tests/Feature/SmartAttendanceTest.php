@@ -17,16 +17,15 @@ use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
 /**
- * Smart attendance — face-scan check-in flow:
+ * Smart attendance — two-step face-scan flow:
  *
- *  - Creating a lecture generates a QR link token + optional attendance toggle
- *    and notifies the lecture audience.
- *  - Lecturers scan students' faces during the lecture by POSTing a live
- *    FaceNet embedding (computed in the browser) to the scan-student endpoint;
- *    the server compares it against the enrolled embeddings of every student
- *    in the audience and marks the best match as present.
- *  - Lecturers can still record attendance manually per lecture.
- *  - The student portal reflects marked attendance.
+ *  1. PREVIEW  — lecturer scans a student's face; the server identifies them
+ *     but does NOT mark attendance yet.
+ *  2. CONFIRM  — the lecturer sees the student's name and clicks Confirm;
+ *     only then is the attendance record created.
+ *
+ * Lecturers can still record attendance manually.
+ * The student portal reflects marked attendance.
  */
 class SmartAttendanceTest extends TestCase
 {
@@ -70,8 +69,6 @@ class SmartAttendanceTest extends TestCase
             'status' => 'Approved',
             'dept'   => 'Computer Science',
             'matric' => 'SUMAS/CS/2023/' . str_pad((string) $n, 3, '0', STR_PAD_LEFT),
-            // Students are face-enrolled by default — override with
-            // ['face_embedding' => null] to simulate a not-yet-enrolled student.
             'face_embedding' => $this->embedding(1.0),
         ], $overrides));
     }
@@ -117,6 +114,25 @@ class SmartAttendanceTest extends TestCase
             'is_active'          => true,
         ], $overrides));
     }
+
+    /** Helper: preview + confirm in one step. */
+    private function scanAndConfirm(int $lectureId, array $embedding): \Illuminate\Testing\TestResponse
+    {
+        $preview = $this->postJson("/api/lecturer/lectures/{$lectureId}/scan-student", [
+            'embedding' => $embedding,
+        ]);
+        $preview->assertOk();
+        $studentId = $preview->json('student.id');
+
+        return $this->postJson("/api/lecturer/lectures/{$lectureId}/scan-student", [
+            'student_id' => $studentId,
+            'confirm'    => true,
+        ]);
+    }
+
+    /* ═══════════════════════════════════════════════════════════
+       LECTURE CREATION TESTS
+    ═══════════════════════════════════════════════════════════ */
 
     public function test_create_lecture_generates_token_and_notifies_students(): void
     {
@@ -199,7 +215,11 @@ class SmartAttendanceTest extends TestCase
         $this->assertNull($res2->json('lecture.attendance_score'));
     }
 
-    public function test_lecturer_can_scan_student_to_mark_attendance(): void
+    /* ═══════════════════════════════════════════════════════════
+       TWO-STEP SCAN FLOW TESTS
+    ═══════════════════════════════════════════════════════════ */
+
+    public function test_preview_identifies_student_without_marking_attendance(): void
     {
         $dept     = $this->makeDept();
         $course   = $this->makeCourse($dept);
@@ -213,6 +233,69 @@ class SmartAttendanceTest extends TestCase
         $res = $this->postJson('/api/lecturer/lectures/' . $lecture->id . '/scan-student', [
             'embedding' => $this->matchingScan(),
         ]);
+
+        $res->assertOk()
+            ->assertJsonPath('student.id', $student->id)
+            ->assertJsonPath('student.name', $student->name)
+            ->assertJsonStructure(['match_score']);
+
+        // Attendance should NOT be created yet.
+        $this->assertDatabaseMissing('attendances', [
+            'student_id' => $student->id,
+            'lecture_id' => $lecture->id,
+        ]);
+    }
+
+    public function test_confirm_marks_attendance_after_preview(): void
+    {
+        $dept     = $this->makeDept();
+        $course   = $this->makeCourse($dept);
+        $lecturer = $this->makeLecturer();
+        $lecturer->courses()->attach($course->id);
+        $lecture  = $this->makeLecture($lecturer, $course);
+        $student  = $this->makeStudent();
+
+        Sanctum::actingAs($lecturer, ['role:lecturer']);
+
+        // Preview
+        $preview = $this->postJson('/api/lecturer/lectures/' . $lecture->id . '/scan-student', [
+            'embedding' => $this->matchingScan(),
+        ]);
+        $preview->assertOk();
+        $this->assertSame($student->id, $preview->json('student.id'));
+
+        // Confirm
+        $confirm = $this->postJson('/api/lecturer/lectures/' . $lecture->id . '/scan-student', [
+            'student_id' => $student->id,
+            'confirm'    => true,
+        ]);
+
+        $confirm->assertCreated()
+            ->assertJsonPath('attendance.status', 'present')
+            ->assertJsonPath('attendance.source', 'lecturer')
+            ->assertJsonPath('student.id', $student->id)
+            ->assertJsonPath('student.name', $student->name);
+
+        $this->assertDatabaseHas('attendances', [
+            'student_id' => $student->id,
+            'lecture_id' => $lecture->id,
+            'status'     => 'present',
+            'source'     => 'lecturer',
+        ]);
+    }
+
+    public function test_lecturer_can_scan_student_to_mark_attendance(): void
+    {
+        $dept     = $this->makeDept();
+        $course   = $this->makeCourse($dept);
+        $lecturer = $this->makeLecturer();
+        $lecturer->courses()->attach($course->id);
+        $lecture  = $this->makeLecture($lecturer, $course);
+        $student  = $this->makeStudent();
+
+        Sanctum::actingAs($lecturer, ['role:lecturer']);
+
+        $res = $this->scanAndConfirm($lecture->id, $this->matchingScan());
 
         $res->assertCreated()
             ->assertJsonPath('attendance.status', 'present')
@@ -239,19 +322,23 @@ class SmartAttendanceTest extends TestCase
 
         Sanctum::actingAs($lecturer, ['role:lecturer']);
 
-        // First scan — success
-        $this->postJson('/api/lecturer/lectures/' . $lecture->id . '/scan-student', [
-            'embedding' => $this->matchingScan(),
-        ])->assertCreated();
+        // First scan — preview + confirm → success
+        $this->scanAndConfirm($lecture->id, $this->matchingScan())->assertCreated();
 
-        // Second scan — rejected (already marked)
-        $res = $this->postJson('/api/lecturer/lectures/' . $lecture->id . '/scan-student', [
+        // Second scan — preview succeeds but shows already_marked
+        $preview2 = $this->postJson('/api/lecturer/lectures/' . $lecture->id . '/scan-student', [
             'embedding' => $this->matchingScan(),
         ]);
+        $preview2->assertOk()->assertJsonPath('already_marked', true);
+        $this->assertStringContainsString('already been marked', $preview2->json('message'));
 
-        $res->assertStatus(422);
-        $this->assertStringContainsString($student->name, $res->json('message'));
-        $this->assertStringContainsString('already been marked', $res->json('message'));
+        // Confirm is rejected (already marked)
+        $confirm2 = $this->postJson('/api/lecturer/lectures/' . $lecture->id . '/scan-student', [
+            'student_id' => $student->id,
+            'confirm'    => true,
+        ]);
+        $confirm2->assertStatus(422);
+        $this->assertStringContainsString('already been marked', $confirm2->json('message'));
     }
 
     public function test_lecturer_cannot_scan_for_other_lecturers_lecture(): void
@@ -327,12 +414,12 @@ class SmartAttendanceTest extends TestCase
         $lecturer = $this->makeLecturer();
         $lecturer->courses()->attach($course->id);
         $lecture  = $this->makeLecture($lecturer, $course);
-        $student  = $this->makeStudent(); // enrolled with embedding(1.0)
+        $student  = $this->makeStudent();
 
         Sanctum::actingAs($lecturer, ['role:lecturer']);
 
         $res = $this->postJson('/api/lecturer/lectures/' . $lecture->id . '/scan-student', [
-            'embedding' => $this->wrongScan(), // inverted = opposite direction
+            'embedding' => $this->wrongScan(),
         ]);
 
         $res->assertStatus(422);
@@ -347,20 +434,27 @@ class SmartAttendanceTest extends TestCase
         $lecturer = $this->makeLecturer();
         $lecturer->courses()->attach($course->id);
         $lecture  = $this->makeLecture($lecturer, $course);
-        // Student1 is enrolled with seed 1.0
-        $student1 = $this->makeStudent();
-        // Student2 is enrolled with seed 2.0
-        $student2 = $this->makeStudent(['face_embedding' => $this->embedding(2.0)]);
+        $student1 = $this->makeStudent(); // seed 1.0
+        $student2 = $this->makeStudent(['face_embedding' => $this->embedding(2.0)]); // seed 2.0
 
         Sanctum::actingAs($lecturer, ['role:lecturer']);
 
-        // Scan with student2's face — must NOT match student1
+        // Scan with student2's face — preview must identify student2, not student1
         $res = $this->postJson('/api/lecturer/lectures/' . $lecture->id . '/scan-student', [
             'embedding' => $this->embedding(2.0),
         ]);
 
-        $res->assertStatus(201);
+        $res->assertOk();
         $this->assertEquals($student2->id, $res->json('student.id'));
+        $this->assertDatabaseMissing('attendances', ['student_id' => $student1->id, 'lecture_id' => $lecture->id]);
+
+        // Now confirm — should mark student2, not student1
+        $confirm = $this->postJson('/api/lecturer/lectures/' . $lecture->id . '/scan-student', [
+            'student_id' => $student2->id,
+            'confirm'    => true,
+        ]);
+        $confirm->assertCreated();
+        $this->assertDatabaseHas('attendances', ['student_id' => $student2->id, 'lecture_id' => $lecture->id]);
         $this->assertDatabaseMissing('attendances', ['student_id' => $student1->id, 'lecture_id' => $lecture->id]);
     }
 
@@ -371,7 +465,6 @@ class SmartAttendanceTest extends TestCase
         $lecturer = $this->makeLecturer();
         $lecturer->courses()->attach($course->id);
         $lecture  = $this->makeLecture($lecturer, $course);
-        // Student has no enrolled face
         $student  = $this->makeStudent(['face_embedding' => null]);
 
         Sanctum::actingAs($lecturer, ['role:lecturer']);
@@ -392,25 +485,19 @@ class SmartAttendanceTest extends TestCase
         $lecturer->courses()->attach($course->id);
         $lecture  = $this->makeLecture($lecturer, $course);
         $student1 = $this->makeStudent();
-        // Student2 has a different embedding seed so we can match them
-        // explicitly with a different scan embedding.
         $student2 = $this->makeStudent(['face_embedding' => $this->embedding(2.0)]);
 
         Sanctum::actingAs($lecturer, ['role:lecturer']);
 
-        // Scan student1 (matches seed 1.0)
-        $res1 = $this->postJson('/api/lecturer/lectures/' . $lecture->id . '/scan-student', [
-            'embedding' => $this->matchingScan(),
-        ]);
+        // Scan + confirm student1 (seed 1.0)
+        $res1 = $this->scanAndConfirm($lecture->id, $this->matchingScan());
         $res1->assertCreated();
         $this->assertSame($student1->id, $res1->json('student.id'));
 
-        // Scan student2 with a scan that matches seed 2.0
+        // Scan + confirm student2 (seed 2.0)
         $scan2 = $this->embedding(2.0);
-        $scan2[0] += 0.0001; // tiny perturbation like matchingScan does
-        $res2 = $this->postJson('/api/lecturer/lectures/' . $lecture->id . '/scan-student', [
-            'embedding' => $scan2,
-        ]);
+        $scan2[0] += 0.0001;
+        $res2 = $this->scanAndConfirm($lecture->id, $scan2);
         $res2->assertCreated();
         $this->assertSame($student2->id, $res2->json('student.id'));
 
@@ -489,9 +576,7 @@ class SmartAttendanceTest extends TestCase
         $student  = $this->makeStudent();
 
         Sanctum::actingAs($lecturer, ['role:lecturer']);
-        $this->postJson('/api/lecturer/lectures/' . $lecture->id . '/scan-student', [
-            'embedding' => $this->matchingScan(),
-        ])->assertCreated();
+        $this->scanAndConfirm($lecture->id, $this->matchingScan())->assertCreated();
 
         Sanctum::actingAs($student, ['role:student']);
         $res = $this->getJson('/api/student/attendance');
@@ -507,17 +592,10 @@ class SmartAttendanceTest extends TestCase
         $lecturer = $this->makeLecturer();
         $lecturer->courses()->attach($course->id);
         $lecture  = $this->makeLecture($lecturer, $course);
-        // Student from another department — not in the audience
-        // They use a different embedding seed so they can't be matched
         $other    = $this->makeStudent(['dept' => 'Nursing Science', 'face_embedding' => $this->embedding(2.0)]);
 
         Sanctum::actingAs($lecturer, ['role:lecturer']);
 
-        // The scan embedding matches seed 1.0. The Nursing student uses seed
-        // 2.0 and is the only face-enrolled student in the audience that is
-        // NOT from CS — but wait, the audience is filtered by the course's
-        // department (Computer Science). So the Nursing student is NOT in the
-        // audience, meaning there are no eligible students → the scan fails.
         $res = $this->postJson('/api/lecturer/lectures/' . $lecture->id . '/scan-student', [
             'embedding' => $this->matchingScan(),
         ]);
@@ -536,7 +614,6 @@ class SmartAttendanceTest extends TestCase
         $present = $this->makeStudent();
         $absent  = $this->makeStudent();
 
-        // present marked attendance; absent did not
         Attendance::create([
             'student_id'   => $present->id,
             'lecture_id'   => $lecture->id,
@@ -571,13 +648,56 @@ class SmartAttendanceTest extends TestCase
 
         Sanctum::actingAs($lecturer, ['role:lecturer']);
 
-        // Wrong-sized embedding → validation error
         $res = $this->postJson('/api/lecturer/lectures/' . $lecture->id . '/scan-student', [
             'embedding' => [1, 2, 3],
         ]);
 
         $res->assertStatus(422);
         $this->assertArrayHasKey('embedding', $res->json('errors'));
+    }
+
+    public function test_confirm_requires_valid_student_id(): void
+    {
+        $dept     = $this->makeDept();
+        $course   = $this->makeCourse($dept);
+        $lecturer = $this->makeLecturer();
+        $lecturer->courses()->attach($course->id);
+        $lecture  = $this->makeLecture($lecturer, $course);
+
+        Sanctum::actingAs($lecturer, ['role:lecturer']);
+
+        // Confirm without student_id → validation error
+        $res = $this->postJson('/api/lecturer/lectures/' . $lecture->id . '/scan-student', [
+            'confirm' => true,
+        ]);
+        $res->assertStatus(422);
+
+        // Confirm with non-existent student_id → validation error
+        $res2 = $this->postJson('/api/lecturer/lectures/' . $lecture->id . '/scan-student', [
+            'student_id' => 99999,
+            'confirm'    => true,
+        ]);
+        $res2->assertStatus(422);
+    }
+
+    public function test_confirm_rejects_student_not_in_audience(): void
+    {
+        $dept     = $this->makeDept();
+        $course   = $this->makeCourse($dept);
+        $lecturer = $this->makeLecturer();
+        $lecturer->courses()->attach($course->id);
+        $lecture  = $this->makeLecture($lecturer, $course);
+        // Student from another department — not in the audience
+        $other    = $this->makeStudent(['dept' => 'Nursing Science', 'face_embedding' => $this->embedding(2.0)]);
+
+        Sanctum::actingAs($lecturer, ['role:lecturer']);
+
+        $res = $this->postJson('/api/lecturer/lectures/' . $lecture->id . '/scan-student', [
+            'student_id' => $other->id,
+            'confirm'    => true,
+        ]);
+        $res->assertStatus(422);
+        $this->assertStringContainsString('not in this lecture audience', $res->json('message'));
     }
 
     public function test_admin_face_register_stores_the_embedding(): void

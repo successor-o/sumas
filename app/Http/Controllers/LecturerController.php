@@ -182,36 +182,25 @@ class LecturerController extends Controller
     }
 
     /**
-     * Mark a student's attendance by scanning their face.
-     * POST /api/lecturer/lectures/{id}/scan-student  { embedding }
+     * Scan a student's face — two-step flow:
      *
-     * The LECTURER points their device camera at a student during the live
-     * lecture; the browser computes a 128-dim FaceNet embedding of the student's
-     * face and sends it here. It is compared against the enrolled embeddings of
-     * every face-enrolled student in the lecture audience; the best match above
-     * the similarity threshold gets marked present.
+     * STEP 1 — PREVIEW (confirm=false, default)
+     *   POST /api/lecturer/lectures/{id}/scan-student  { embedding }
+     *   Returns the matched student + match_score but does NOT create attendance.
+     *   The lecturer sees the name and decides whether to proceed.
+     *
+     * STEP 2 — CONFIRM (confirm=true)
+     *   POST /api/lecturer/lectures/{id}/scan-student  { student_id, confirm: true }
+     *   Creates the attendance record for the student shown in step 1.
      *
      * Guard rails:
      *  - The lecture must belong to the lecturer, be active and have smart
      *    attendance enabled.
-     *  - Only approved, face-enrolled students in the lecture audience
-     *    (enrolled in the course or in the course's department) can be matched
-     *    — a student outside the audience can never be marked this way.
+     *  - Only approved, face-enrolled students in the lecture audience can be matched.
      *  - A student can only be marked once per lecture.
-     *  - The lecturer's device is NOT locked to a single scan — it records
-     *    every student the lecturer scans.
      */
     public function scanStudent(Request $request, int $id): JsonResponse
     {
-        $validator = Validator::make($request->all(), [
-            'embedding' => ['required', 'array', 'size:128'],
-            'embedding.*' => ['numeric'],
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json(['message' => 'Validation failed.', 'errors' => $validator->errors()], 422);
-        }
-
         $lecturer = $request->user();
         $lecture = Lecture::where('id', $id)
             ->where('lecturer_id', $lecturer->id)
@@ -229,6 +218,64 @@ class LecturerController extends Controller
             return response()->json(['message' => 'Face scan check-in is not enabled for this lecture.'], 422);
         }
 
+        /* ── STEP 2: CONFIRM — mark attendance for a previously identified student ── */
+        if ($request->boolean('confirm')) {
+            $validator = Validator::make($request->all(), [
+                'student_id' => ['required', 'exists:users,id'],
+            ]);
+            if ($validator->fails()) {
+                return response()->json(['message' => 'Validation failed.', 'errors' => $validator->errors()], 422);
+            }
+
+            $studentId = (int) $request->input('student_id');
+            $student = User::students()->where('id', $studentId)->first();
+
+            if (! $student || ! $student->hasFaceEnrolled()) {
+                return response()->json(['message' => 'Student not found or face not enrolled.'], 422);
+            }
+
+            // Ensure the student is in the lecture audience.
+            $inAudience = $this->lectureStudents($lecture)->contains('id', $studentId);
+            if (! $inAudience) {
+                return response()->json(['message' => 'Student is not in this lecture audience.'], 422);
+            }
+
+            // One scan per student.
+            if (Attendance::where('lecture_id', $lecture->id)
+                ->where('student_id', $studentId)
+                ->exists()) {
+                return response()->json([
+                    'message' => $student->name . ' has already been marked for this lecture.',
+                    'student' => $this->formatStudent($student),
+                ], 422);
+            }
+
+            $attendance = Attendance::create([
+                'student_id'   => $studentId,
+                'lecture_id'   => $lecture->id,
+                'course_id'    => $lecture->course_id,
+                'lecturer_id'  => $lecturer->id,
+                'lecture_date' => $lecture->scheduled_date,
+                'status'       => 'present',
+                'source'       => 'lecturer',
+            ]);
+
+            return response()->json([
+                'message'     => 'Attendance marked for ' . $student->name . '.',
+                'student'     => $this->formatStudent($student),
+                'attendance'  => $this->formatAttendance($attendance),
+            ], 201);
+        }
+
+        /* ── STEP 1: PREVIEW — identify the student without marking attendance ── */
+        $validator = Validator::make($request->all(), [
+            'embedding'  => ['required', 'array', 'size:128'],
+            'embedding.*' => ['numeric'],
+        ]);
+        if ($validator->fails()) {
+            return response()->json(['message' => 'Validation failed.', 'errors' => $validator->errors()], 422);
+        }
+
         // Only face-enrolled students in the lecture audience can be matched.
         $audience = $this->lectureStudents($lecture)
             ->filter(fn (User $s) => $s->hasFaceEnrolled())
@@ -239,7 +286,7 @@ class LecturerController extends Controller
         }
 
         $embedding = array_values(array_map('floatval', $request->input('embedding')));
-        $threshold = (float) config('attendance.face_similarity_threshold', 0.55);
+        $threshold = (float) config('attendance.face_similarity_threshold', 0.70);
 
         // Find the best-matching enrolled face in the audience.
         $best = null;
@@ -256,32 +303,19 @@ class LecturerController extends Controller
             return response()->json(['message' => 'Face not recognized. Ask the student to face the camera and try again.'], 422);
         }
 
-        // One scan per student.
-        if (Attendance::where('lecture_id', $lecture->id)
+        // Check if already marked.
+        $alreadyMarked = Attendance::where('lecture_id', $lecture->id)
             ->where('student_id', $best->id)
-            ->exists()) {
-            return response()->json([
-                'message' => $best->name . ' has already been marked for this lecture.',
-                'student' => $this->formatStudent($best),
-            ], 422);
-        }
-
-        $attendance = Attendance::create([
-            'student_id'   => $best->id,
-            'lecture_id'   => $lecture->id,
-            'course_id'    => $lecture->course_id,
-            'lecturer_id'  => $lecturer->id,
-            'lecture_date' => $lecture->scheduled_date,
-            'status'       => 'present',
-            'source'       => 'lecturer',
-        ]);
+            ->exists();
 
         return response()->json([
-            'message'      => 'Attendance marked for ' . $best->name . '.',
+            'message'      => $alreadyMarked
+                ? $best->name . ' has already been marked for this lecture.'
+                : 'Is this ' . $best->name . '?',
             'student'      => $this->formatStudent($best),
-            'attendance'   => $this->formatAttendance($attendance),
             'match_score'  => round($bestScore, 4),
-        ], 201);
+            'already_marked' => $alreadyMarked,
+        ]);
     }
 
     /**
