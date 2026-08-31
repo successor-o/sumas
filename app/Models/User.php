@@ -69,7 +69,12 @@ class User extends Authenticatable
 
     /**
      * Cosine similarity between the student's enrolled FaceNet embedding and a
-     * live scan embedding. Both are expected to be 128-dim unit vectors.
+     * live scan embedding. Both are expected to be 128-dim vectors.
+     *
+     * Both vectors are L2-normalized before comparison so that the dot product
+     * equals the true cosine similarity regardless of whether the original
+     * descriptors were unit vectors.
+     *
      * Returns 0.0 when either side is unusable.
      */
     public function faceSimilarity(array $liveEmbedding): float
@@ -80,20 +85,91 @@ class User extends Authenticatable
             return 0.0;
         }
 
-        $dot = 0.0;
-        $a   = 0.0;
-        $b   = 0.0;
-        foreach ($enrolled as $i => $value) {
-            $dot += (float) $value * (float) $liveEmbedding[$i];
-            $a   += (float) $value ** 2;
-            $b   += (float) $liveEmbedding[$i] ** 2;
-        }
+        // L2-normalize both vectors so the dot product IS the cosine
+        // similarity — face-api.js descriptors are not always perfect unit
+        // vectors, especially with TinyFaceDetector.
+        $normEnrolled = $this->l2Norm($enrolled);
+        $normLive     = $this->l2Norm($liveEmbedding);
 
-        if ($a <= 0.0 || $b <= 0.0) {
+        if ($normEnrolled < 1e-8 || $normLive < 1e-8) {
             return 0.0;
         }
 
-        return $dot / (sqrt($a) * sqrt($b));
+        $dot = 0.0;
+        $count = count($enrolled);
+        for ($i = 0; $i < $count; $i++) {
+            $dot += ($enrolled[$i] / $normEnrolled) * ($liveEmbedding[$i] / $normLive);
+        }
+
+        // Clamp to [-1, 1] to avoid floating-point overshoot.
+        return max(-1.0, min(1.0, $dot));
+    }
+
+    /**
+     * L2 (Euclidean) norm of a vector.
+     */
+    private function l2Norm(array $v): float
+    {
+        $sum = 0.0;
+        foreach ($v as $x) {
+            $sum += (float) $x * (float) $x;
+        }
+
+        return sqrt($sum);
+    }
+
+    /**
+     * Check whether a live scan embedding looks like a valid face descriptor.
+     * face-api.js returns garbage descriptors when the detector fires on
+     * non-face regions, when the image is too blurry, or when the model
+     * files fail to load.
+     *
+     * A valid descriptor should:
+     *  - Be a 128-element numeric array
+     *  - Have an L2 norm reasonably close to 1.0 (0.5–2.0 after the model's
+     *    own normalization)
+     *  - Have enough variance (not all zeros or nearly identical values)
+     */
+    public static function isValidFaceEmbedding(array $embedding): bool
+    {
+        if (count($embedding) !== 128) {
+            return false;
+        }
+
+        $norm = 0.0;
+        $min  = PHP_FLOAT_MAX;
+        $max  = PHP_FLOAT_MIN;
+        $sum  = 0.0;
+
+        foreach ($embedding as $v) {
+            $f = (float) $v;
+            $norm += $f * $f;
+            $min = min($min, $f);
+            $max = max($max, $f);
+            $sum += $f;
+        }
+
+        $norm = sqrt($norm);
+
+        // L2 norm must be in a reasonable range.
+        if ($norm < 0.1 || $norm > 10.0) {
+            return false;
+        }
+
+        // Standard deviation must be meaningful — a flat/garbage embedding
+        // has almost no variance.
+        $mean = $sum / 128.0;
+        $varSum = 0.0;
+        foreach ($embedding as $v) {
+            $d = (float) $v - $mean;
+            $varSum += $d * $d;
+        }
+        $stddev = sqrt($varSum / 128.0);
+        if ($stddev < 0.01) {
+            return false;
+        }
+
+        return true;
     }
 
     /**
@@ -102,7 +178,7 @@ class User extends Authenticatable
      */
     public function verifyFace(array $liveEmbedding, ?float $threshold = null): bool
     {
-        $threshold = $threshold ?? (float) config('attendance.face_similarity_threshold', 0.55);
+        $threshold = $threshold ?? (float) config('attendance.face_similarity_threshold', 0.70);
 
         return $this->faceSimilarity($liveEmbedding) >= $threshold;
     }

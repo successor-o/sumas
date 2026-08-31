@@ -924,24 +924,44 @@ if (document.getElementById('lecturer-dashboard')) {
   function detectLoop() {
     if (!scanStream || scanLocked) return;
     if (!scanVideo.videoWidth) { scanRaf = requestAnimationFrame(detectLoop); return; }
-    faceapi.detectSingleFace(scanVideo, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 }))
+    // Detect all faces to enforce single-face rule and confidence threshold.
+    faceapi.detectAllFaces(scanVideo, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.4 }))
       .withFaceLandmarks()
       .withFaceDescriptor()
-      .then(result => {
-        if (!result) { faceStable = 0; scanRaf = requestAnimationFrame(detectLoop); return; }
+      .then(results => {
+        if (!results || results.length === 0) { faceStable = 0; scanRaf = requestAnimationFrame(detectLoop); return; }
+        if (results.length > 1) {
+          // Multiple faces — show a warning and keep scanning.
+          showOverlay('⚠️ Multiple faces — point at one student only', false);
+          faceStable = 0;
+          scanRaf = requestAnimationFrame(detectLoop);
+          return;
+        }
+        const result = results[0];
+        const detScore = result.detection?.score || 0;
+        if (detScore < 0.6) {
+          // Low confidence detection — ask for better positioning.
+          showOverlay('⚠️ Move closer / improve lighting', false);
+          faceStable = 0;
+          scanRaf = requestAnimationFrame(detectLoop);
+          return;
+        }
         faceStable++;
-        if (faceStable >= 2) { markScan(Array.from(result.descriptor)); return; }
+        if (faceStable >= 2) {
+          markScan(Array.from(result.descriptor), results.length);
+          return;
+        }
         scanRaf = requestAnimationFrame(detectLoop);
       })
       .catch(() => { scanRaf = requestAnimationFrame(detectLoop); });
   }
 
-  async function markScan(embedding) {
+  async function markScan(embedding, faceCount = 1) {
     if (scanLocked) return;
     scanLocked = true;
     stopCamera();
     showOverlay('🤖 Identifying student…', true);
-    const res = await API.lecturer.scanStudent(scanLecture.id, { embedding });
+    const res = await API.lecturer.scanStudent(scanLecture.id, { embedding, face_count: faceCount });
     showOverlay('');
     if (res.status === 401) {
       SessionStore.clear();

@@ -286,6 +286,30 @@ class LecturerController extends Controller
         }
 
         $embedding = array_values(array_map('floatval', $request->input('embedding')));
+
+        // Reject garbage embeddings — face-api.js can produce all-zero or
+        // degenerate descriptors when the model files fail to load, when the
+        // detector fires on a non-face region, or when the image is too blurry.
+        if (! User::isValidFaceEmbedding($embedding)) {
+            return response()->json([
+                'message' => 'The face image quality is too low. Ask the student to face the camera directly with good lighting and try again.',
+            ], 422);
+        }
+
+        // Require at least 2 faces detected in the frame so the lecturer
+        // is actually pointing at someone (not a wall / empty room).
+        $faceCount = (int) $request->input('face_count', 1);
+        if ($faceCount < 1) {
+            return response()->json([
+                'message' => 'No face detected. Ask the student to face the camera and try again.',
+            ], 422);
+        }
+        if ($faceCount > 1) {
+            return response()->json([
+                'message' => 'Multiple faces detected. Point the camera at one student at a time.',
+            ], 422);
+        }
+
         $threshold = (float) config('attendance.face_similarity_threshold', 0.70);
 
         // Find the best-matching enrolled face in the audience.
