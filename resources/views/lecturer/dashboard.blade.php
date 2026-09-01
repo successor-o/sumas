@@ -84,7 +84,8 @@
     .scan-confirm { margin-top: 14px; padding: 16px; background: var(--surf-2); border: 2px solid var(--brand); border-radius: var(--r-lg); text-align: center; }
     .scan-confirm-name { font-size: 1.15rem; font-weight: 800; color: var(--t-primary); margin: 8px 0 4px; }
     .scan-confirm-matric { font-size: .82rem; color: var(--t-muted); margin-bottom: 4px; }
-    .scan-confirm-score { font-size: .76rem; color: var(--brand); font-weight: 600; margin-bottom: 14px; }
+    .scan-confirm-score { font-size: .76rem; color: var(--brand); font-weight: 600; margin-bottom: 14px; display: flex; justify-content: center; gap: 4px; flex-wrap: wrap; }
+    .scan-confirm-score span { display: inline-flex; align-items: center; }
     .scan-confirm-actions { display: flex; gap: var(--s3); justify-content: center; }
     .scan-confirm-actions .btn-confirm { background: var(--success); color: #fff; border: none; min-width: 140px; }
     .scan-confirm-actions .btn-confirm:hover { filter: brightness(1.1); }
@@ -837,10 +838,11 @@ if (document.getElementById('lecturer-dashboard')) {
     if (btn) btn.style.display = 'flex';
   }
 
-  function showConfirmDialog(student, matchScore, alreadyMarked) {
+  function showConfirmDialog(student, matchScore, detScore, alreadyMarked) {
     const container = document.getElementById('scan-result-container');
     if (!container) return;
     const scorePct = (matchScore * 100).toFixed(1);
+    const detPct = detScore ? (detScore * 100).toFixed(0) : '—';
     const headerText = alreadyMarked
       ? '⚠️ Already Marked'
       : 'Is this the correct student?';
@@ -848,7 +850,11 @@ if (document.getElementById('lecturer-dashboard')) {
       '<div style="font-weight:700;font-size:.88rem;color:var(--t-primary)">' + headerText + '</div>' +
       '<div class="scan-confirm-name">' + escHtml(student.name) + '</div>' +
       '<div class="scan-confirm-matric">' + escHtml(student.matric || '') + '</div>' +
-      '<div class="scan-confirm-score">Face match: ' + scorePct + '%</div>' +
+      '<div class="scan-confirm-score">' +
+        '<span title="How confident the camera is that it found a face">Detection: ' + detPct + '%</span>' +
+        ' &nbsp;·&nbsp; ' +
+        '<span title="How similar the face is to the enrolled photo">Match: ' + scorePct + '%</span>' +
+      '</div>' +
       (alreadyMarked
         ? '<div class="scan-confirm-actions">'
           + '<button class="btn btn-md btn-cancel" id="confirm-cancel-btn">🔄 Scan Another</button>'
@@ -921,15 +927,21 @@ if (document.getElementById('lecturer-dashboard')) {
     }
   }
 
+  let lastDetScore = 0;
   function detectLoop() {
     if (!scanStream || scanLocked) return;
     if (!scanVideo.videoWidth) { scanRaf = requestAnimationFrame(detectLoop); return; }
     // Detect all faces to enforce single-face rule and confidence threshold.
-    faceapi.detectAllFaces(scanVideo, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.4 }))
+    faceapi.detectAllFaces(scanVideo, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.35 }))
       .withFaceLandmarks()
       .withFaceDescriptor()
       .then(results => {
-        if (!results || results.length === 0) { faceStable = 0; scanRaf = requestAnimationFrame(detectLoop); return; }
+        if (!results || results.length === 0) {
+          faceStable = 0;
+          showOverlay('Point camera at the student — scanning…', true);
+          scanRaf = requestAnimationFrame(detectLoop);
+          return;
+        }
         if (results.length > 1) {
           // Multiple faces — show a warning and keep scanning.
           showOverlay('⚠️ Multiple faces — point at one student only', false);
@@ -939,24 +951,26 @@ if (document.getElementById('lecturer-dashboard')) {
         }
         const result = results[0];
         const detScore = result.detection?.score || 0;
-        if (detScore < 0.6) {
+        lastDetScore = detScore;
+        if (detScore < 0.45) {
           // Low confidence detection — ask for better positioning.
-          showOverlay('⚠️ Move closer / improve lighting', false);
+          showOverlay('⚠️ Move closer / improve lighting (confidence: ' + (detScore * 100).toFixed(0) + '%)', false);
           faceStable = 0;
           scanRaf = requestAnimationFrame(detectLoop);
           return;
         }
+        showOverlay('✅ Face detected — hold still… (' + (detScore * 100).toFixed(0) + '% confidence)', true);
         faceStable++;
         if (faceStable >= 2) {
-          markScan(Array.from(result.descriptor), results.length);
+          markScan(Array.from(result.descriptor), results.length, detScore);
           return;
         }
         scanRaf = requestAnimationFrame(detectLoop);
       })
-      .catch(() => { scanRaf = requestAnimationFrame(detectLoop); });
+      .catch(err => { console.error('Face detection error:', err); scanRaf = requestAnimationFrame(detectLoop); });
   }
 
-  async function markScan(embedding, faceCount = 1) {
+  async function markScan(embedding, faceCount = 1, detScore = 0) {
     if (scanLocked) return;
     scanLocked = true;
     stopCamera();
@@ -971,7 +985,7 @@ if (document.getElementById('lecturer-dashboard')) {
     if (res.ok && res.data.student) {
       // Step 1 succeeded — show confirmation dialog
       scanLocked = false; // allow confirm/cancel actions
-      showConfirmDialog(res.data.student, res.data.match_score || 0, !!res.data.already_marked);
+      showConfirmDialog(res.data.student, res.data.match_score || 0, detScore, !!res.data.already_marked);
       return;
     }
     // No match or error
