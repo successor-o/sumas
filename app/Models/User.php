@@ -68,12 +68,19 @@ class User extends Authenticatable
     }
 
     /**
-     * Cosine similarity between the student's enrolled FaceNet embedding and a
+     * Match confidence between the student's enrolled FaceNet embedding and a
      * live scan embedding. Both are expected to be 128-dim vectors.
      *
-     * Both vectors are L2-normalized before comparison so that the dot product
-     * equals the true cosine similarity regardless of whether the original
-     * descriptors were unit vectors.
+     * face-api.js's FaceRecognitionNet is trained with triplet loss on
+     * EUCLIDEAN DISTANCE, not cosine similarity — that's the metric its own
+     * docs/examples use, with ~0.6 as the standard same-person cutoff.
+     * Cosine similarity is the wrong metric for this descriptor space: two
+     * different people's real descriptors share a large common "mean face"
+     * component and routinely score 0.85-0.95+ under cosine similarity,
+     * producing false positives. Euclidean distance does not have this
+     * problem, so we convert it into a 0..1 confidence score here
+     * (0 distance -> 1.0 confidence, falling off from there) and keep the
+     * "higher is better, compare against a floor" shape the caller expects.
      *
      * Returns 0.0 when either side is unusable.
      */
@@ -85,34 +92,21 @@ class User extends Authenticatable
             return 0.0;
         }
 
-        // L2-normalize both vectors so the dot product IS the cosine
-        // similarity — face-api.js descriptors are not always perfect unit
-        // vectors, especially with TinyFaceDetector.
-        $normEnrolled = $this->l2Norm($enrolled);
-        $normLive     = $this->l2Norm($liveEmbedding);
+        $distance = $this->euclideanDistance($enrolled, $liveEmbedding);
 
-        if ($normEnrolled < 1e-8 || $normLive < 1e-8) {
-            return 0.0;
-        }
-
-        $dot = 0.0;
-        $count = count($enrolled);
-        for ($i = 0; $i < $count; $i++) {
-            $dot += ($enrolled[$i] / $normEnrolled) * ($liveEmbedding[$i] / $normLive);
-        }
-
-        // Clamp to [-1, 1] to avoid floating-point overshoot.
-        return max(-1.0, min(1.0, $dot));
+        return max(0.0, 1.0 - $distance);
     }
 
     /**
-     * L2 (Euclidean) norm of a vector.
+     * Euclidean distance between two equal-length vectors.
      */
-    private function l2Norm(array $v): float
+    private function euclideanDistance(array $a, array $b): float
     {
         $sum = 0.0;
-        foreach ($v as $x) {
-            $sum += (float) $x * (float) $x;
+        $count = count($a);
+        for ($i = 0; $i < $count; $i++) {
+            $d = (float) $a[$i] - (float) $b[$i];
+            $sum += $d * $d;
         }
 
         return sqrt($sum);
@@ -178,7 +172,7 @@ class User extends Authenticatable
      */
     public function verifyFace(array $liveEmbedding, ?float $threshold = null): bool
     {
-        $threshold = $threshold ?? (float) config('attendance.face_similarity_threshold', 0.70);
+        $threshold = $threshold ?? (float) config('attendance.face_similarity_threshold', 0.45);
 
         return $this->faceSimilarity($liveEmbedding) >= $threshold;
     }

@@ -884,6 +884,7 @@ if (document.getElementById('lecturer-dashboard')) {
     scanLecture = lecture;
     scanLocked = false;
     faceStable = 0;
+    scanStartTime = Date.now();
     clearScanResult();
     document.getElementById('scan-lecture-info').innerHTML =
       '<div class="scan-lecture-course">' + escHtml(courseLabel(lecture.course_id)) + '</div>' +
@@ -928,14 +929,25 @@ if (document.getElementById('lecturer-dashboard')) {
   }
 
   let lastDetScore = 0;
+  let scanStartTime = 0;
+  const SCAN_TIMEOUT_MS = 20000; // 20 seconds before showing a helpful message
+
   function detectLoop() {
     if (!scanStream || scanLocked) return;
     if (!scanVideo.videoWidth) { scanRaf = requestAnimationFrame(detectLoop); return; }
+
+    // Show a timeout hint if scanning has been running too long.
+    const elapsed = Date.now() - scanStartTime;
+    if (elapsed > SCAN_TIMEOUT_MS && faceStable === 0) {
+      showOverlay('⏱ Taking a while? Make sure the student\'s face is clearly visible and well-lit.', false);
+    }
+
     // Detect all faces to enforce single-face rule and confidence threshold.
-    faceapi.detectAllFaces(scanVideo, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.35 }))
+    faceapi.detectAllFaces(scanVideo, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.3 }))
       .withFaceLandmarks()
-      .withFaceDescriptor()
+      .withFaceDescriptors()
       .then(results => {
+        if (!scanStream || scanLocked) return; // modal closed during detection
         if (!results || results.length === 0) {
           faceStable = 0;
           showOverlay('Point camera at the student — scanning…', true);
@@ -952,13 +964,14 @@ if (document.getElementById('lecturer-dashboard')) {
         const result = results[0];
         const detScore = result.detection?.score || 0;
         lastDetScore = detScore;
-        if (detScore < 0.45) {
-          // Low confidence detection — ask for better positioning.
+        if (detScore < 0.30) {
+          // Very low confidence — ask for better positioning.
           showOverlay('⚠️ Move closer / improve lighting (confidence: ' + (detScore * 100).toFixed(0) + '%)', false);
           faceStable = 0;
           scanRaf = requestAnimationFrame(detectLoop);
           return;
         }
+        // Face detected with reasonable confidence — proceed immediately.
         showOverlay('✅ Face detected — hold still… (' + (detScore * 100).toFixed(0) + '% confidence)', true);
         faceStable++;
         if (faceStable >= 2) {
@@ -967,7 +980,10 @@ if (document.getElementById('lecturer-dashboard')) {
         }
         scanRaf = requestAnimationFrame(detectLoop);
       })
-      .catch(err => { console.error('Face detection error:', err); scanRaf = requestAnimationFrame(detectLoop); });
+      .catch(err => {
+        console.error('Face detection error:', err);
+        if (scanStream && !scanLocked) scanRaf = requestAnimationFrame(detectLoop);
+      });
   }
 
   async function markScan(embedding, faceCount = 1, detScore = 0) {
@@ -975,7 +991,17 @@ if (document.getElementById('lecturer-dashboard')) {
     scanLocked = true;
     stopCamera();
     showOverlay('🤖 Identifying student…', true);
-    const res = await API.lecturer.scanStudent(scanLecture.id, { embedding, face_count: faceCount });
+    let res;
+    try {
+      res = await API.lecturer.scanStudent(scanLecture.id, { embedding, face_count: faceCount });
+    } catch (e) {
+      console.error('Scan API error:', e);
+      scanLocked = false;
+      showScanResult('error', '❌ Network error', 'Could not reach the server. Check your connection and try again.');
+      const btn = document.getElementById('scan-another-btn');
+      if (btn) { btn.style.display = 'flex'; btn.textContent = '🔄 Scan Another Student'; }
+      return;
+    }
     showOverlay('');
     if (res.status === 401) {
       SessionStore.clear();
@@ -991,9 +1017,9 @@ if (document.getElementById('lecturer-dashboard')) {
     // No match or error
     scanLocked = false;
     const msg = res.data.message || 'Could not identify student.';
-    showScanResult('error', '❌ ' + escHtml(msg), 'Ask the student to face the camera and try again.');
+    showScanResult('error', '❌ ' + escHtml(msg), 'Ask the student to face the camera directly with good lighting and try again.');
     const btn = document.getElementById('scan-another-btn');
-    if (btn) { btn.style.display = 'flex'; btn.textContent = '🤖 Try Again'; }
+    if (btn) { btn.style.display = 'flex'; btn.textContent = '🔄 Try Again'; }
   }
 
   async function doConfirmAttendance(studentId) {
@@ -1031,6 +1057,7 @@ if (document.getElementById('lecturer-dashboard')) {
     clearScanResult();
     scanLocked = false;
     faceStable = 0;
+    scanStartTime = Date.now();
     showOverlay('⏳ Starting camera…', true);
     startScanner();
   }

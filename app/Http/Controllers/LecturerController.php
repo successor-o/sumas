@@ -310,7 +310,7 @@ class LecturerController extends Controller
             ], 422);
         }
 
-        $threshold = (float) config('attendance.face_similarity_threshold', 0.70);
+        $threshold = (float) config('attendance.face_similarity_threshold', 0.45);
 
         // Find the best-matching enrolled face in the audience.
         $best = null;

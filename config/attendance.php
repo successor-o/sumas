@@ -16,11 +16,15 @@ return [
     'gps_radius_meters' => (float) env('ATTENDANCE_GPS_RADIUS_METERS', 200),
 
     /*
-    | Minimum cosine similarity between the student's enrolled FaceNet embedding
+    | Minimum match confidence between the student's enrolled FaceNet embedding
     | and their live check-in scan for the identity to be accepted (0..1).
-    | Same-person FaceNet scores usually sit well above 0.7; 0.55 keeps a little
-    | headroom for webcam/lighting differences while still rejecting impostors.
+    | Confidence is derived from Euclidean distance (1 - distance) — the metric
+    | face-api.js's FaceRecognitionNet is actually trained for. Genuine
+    | same-person distance is usually below 0.6 (confidence above 0.4);
+    | different people are usually well above that distance. 0.45 keeps a
+    | little headroom for webcam/lighting differences while still rejecting
+    | impostors.
     */
-    'face_similarity_threshold' => (float) env('ATTENDANCE_FACE_SIMILARITY_THRESHOLD', 0.70),
+    'face_similarity_threshold' => (float) env('ATTENDANCE_FACE_SIMILARITY_THRESHOLD', 0.45),
 
 ];
